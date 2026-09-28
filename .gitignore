@@ -1,3 +1,20 @@
 # Local AI working context / professor's assignment text — not for public repo
 CLAUDE.md
 docs/assignment_spec.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime data (DATA_DIR default) and uploads
+data/
+
+# Env files
+.env
+
+# Test/coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
