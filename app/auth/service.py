@@ -7,6 +7,7 @@ from app.auth.security import (
     new_session_token,
     verify_password,
 )
+from app.shared.timeutils import utc_now_iso
 
 SESSION_TTL = timedelta(days=7)
 
@@ -25,8 +26,10 @@ class InvalidInviteCodeError(Exception):
 
 def _create_session(conn, user_id: int) -> str:
     token = new_session_token()
-    expires_at = (datetime.now(timezone.utc) + SESSION_TTL).isoformat()
-    repository.insert_session(conn, token, user_id, expires_at)
+    now = datetime.now(timezone.utc)
+    created_at = now.isoformat(timespec="seconds")
+    expires_at = (now + SESSION_TTL).isoformat(timespec="seconds")
+    repository.insert_session(conn, token, user_id, created_at, expires_at)
     return token
 
 
@@ -37,7 +40,9 @@ def register(conn, username: str, password: str) -> str:
         raise ValueError("password must be at least 8 characters")
     if repository.get_user_by_username(conn, username):
         raise UsernameTakenError(username)
-    user_id = repository.insert_user(conn, username, hash_password(password))
+    user_id = repository.insert_user(
+        conn, username, hash_password(password), utc_now_iso()
+    )
     return _create_session(conn, user_id)
 
 
@@ -72,8 +77,9 @@ def create_group(conn, user_id: int, name: str):
     invite_code = new_invite_code()
     while repository.get_group_by_invite_code(conn, invite_code):
         invite_code = new_invite_code()
-    group_id = repository.insert_group(conn, name, invite_code, user_id)
-    repository.add_group_member(conn, group_id, user_id)
+    now = utc_now_iso()
+    group_id = repository.insert_group(conn, name, invite_code, user_id, now)
+    repository.add_group_member(conn, group_id, user_id, now)
     return repository.get_group_by_id(conn, group_id)
 
 
@@ -81,7 +87,7 @@ def join_group(conn, user_id: int, invite_code: str):
     group = repository.get_group_by_invite_code(conn, invite_code.strip().upper())
     if group is None:
         raise InvalidInviteCodeError(invite_code)
-    repository.add_group_member(conn, group["id"], user_id)
+    repository.add_group_member(conn, group["id"], user_id, utc_now_iso())
     return group
 
 

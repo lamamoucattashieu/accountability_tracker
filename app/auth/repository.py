@@ -3,13 +3,13 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
 
@@ -18,13 +18,13 @@ CREATE TABLE IF NOT EXISTS groups (
     name TEXT NOT NULL,
     invite_code TEXT NOT NULL UNIQUE,
     created_by INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS group_members (
     group_id INTEGER NOT NULL REFERENCES groups(id),
     user_id INTEGER NOT NULL REFERENCES users(id),
-    joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+    joined_at TEXT NOT NULL,
     PRIMARY KEY (group_id, user_id)
 );
 """
@@ -34,10 +34,10 @@ def create_tables(conn):
     conn.executescript(CREATE_TABLES_SQL)
 
 
-def insert_user(conn, username, password_hash):
+def insert_user(conn, username, password_hash, created_at):
     cur = conn.execute(
-        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-        (username, password_hash),
+        "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+        (username, password_hash, created_at),
     )
     return cur.lastrowid
 
@@ -52,10 +52,11 @@ def get_user_by_id(conn, user_id):
     return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
-def insert_session(conn, session_id, user_id, expires_at):
+def insert_session(conn, session_id, user_id, created_at, expires_at):
     conn.execute(
-        "INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)",
-        (session_id, user_id, expires_at),
+        "INSERT INTO sessions (id, user_id, created_at, expires_at)"
+        " VALUES (?, ?, ?, ?)",
+        (session_id, user_id, created_at, expires_at),
     )
 
 
@@ -69,10 +70,11 @@ def delete_session(conn, session_id):
     conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
 
-def insert_group(conn, name, invite_code, created_by):
+def insert_group(conn, name, invite_code, created_by, created_at):
     cur = conn.execute(
-        "INSERT INTO groups (name, invite_code, created_by) VALUES (?, ?, ?)",
-        (name, invite_code, created_by),
+        "INSERT INTO groups (name, invite_code, created_by, created_at)"
+        " VALUES (?, ?, ?, ?)",
+        (name, invite_code, created_by, created_at),
     )
     return cur.lastrowid
 
@@ -87,10 +89,11 @@ def get_group_by_id(conn, group_id):
     return conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
 
 
-def add_group_member(conn, group_id, user_id):
+def add_group_member(conn, group_id, user_id, joined_at):
     conn.execute(
-        "INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)",
-        (group_id, user_id),
+        "INSERT OR IGNORE INTO group_members (group_id, user_id, joined_at)"
+        " VALUES (?, ?, ?)",
+        (group_id, user_id, joined_at),
     )
 
 
