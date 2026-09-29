@@ -1,49 +1,10 @@
+import sqlite3
+
 import pytest
 
-from app.auth import repository as auth_repository
-from app.auth.security import new_invite_code
-from app.checkins import service
+from app.checkins import repository, service
 from app.shared.timeutils import utc_now_iso
-
-
-def make_user(conn, username):
-    # Insert directly: register() hashes the password, which is slow and irrelevant here.
-    return auth_repository.insert_user(conn, username, "not-a-real-hash", utc_now_iso())
-
-
-def make_group(conn, *member_ids):
-    now = utc_now_iso()
-    group_id = auth_repository.insert_group(
-        conn, "friends", new_invite_code(), member_ids[0], now
-    )
-    for user_id in member_ids:
-        auth_repository.add_group_member(conn, group_id, user_id, now)
-    return group_id
-
-
-@pytest.fixture
-def alice(conn):
-    return make_user(conn, "alice")
-
-
-@pytest.fixture
-def bob(conn):
-    return make_user(conn, "bob")
-
-
-@pytest.fixture
-def outsider(conn):
-    return make_user(conn, "outsider")
-
-
-@pytest.fixture
-def group_id(conn, alice, bob):
-    return make_group(conn, alice, bob)
-
-
-@pytest.fixture
-def goal(conn, alice, group_id):
-    return service.create_goal(conn, alice, group_id, "Gym", "at least 45 min", 3)
+from tests.factories import make_group
 
 
 # --- create ---
@@ -252,9 +213,5 @@ def test_archive_missing_goal_is_not_found(conn, alice):
 
 def test_database_rejects_times_per_week_out_of_range(conn, alice, group_id):
     """The CHECK constraint is a second line of defence behind the service."""
-    import sqlite3
-
-    from app.checkins import repository
-
     with pytest.raises(sqlite3.IntegrityError):
         repository.insert_goal(conn, group_id, alice, "Gym", None, 9, utc_now_iso())

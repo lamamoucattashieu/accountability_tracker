@@ -1,38 +1,57 @@
+import logging
+
 from app.auth import service as auth_service
 from app.checkins import repository
+from app.shared import uploads
 from app.shared.timeutils import utc_now_iso
+
+logger = logging.getLogger(__name__)
 
 TITLE_MAX_LENGTH = 80
 DESCRIPTION_MAX_LENGTH = 500
 MIN_TIMES_PER_WEEK = 1
 MAX_TIMES_PER_WEEK = 7
+CAPTION_MAX_LENGTH = 200
+FEED_LIMIT = 50
 
 
-class GoalError(Exception):
-    """Base class for every rule violation in this module."""
+class CheckinsError(Exception):
+    """Base class for every rule violation in the goals & check-ins domain."""
 
 
-class GroupNotFound(GoalError):
+class GroupNotFound(CheckinsError):
     pass
 
 
-class GoalNotFound(GoalError):
+class GoalNotFound(CheckinsError):
     pass
 
 
-class NotGroupMember(GoalError):
+class NotGroupMember(CheckinsError):
     pass
 
 
-class NotGoalOwner(GoalError):
+class NotGoalOwner(CheckinsError):
     pass
 
 
-class GoalArchived(GoalError):
+class GoalArchived(CheckinsError):
     pass
 
 
-class InvalidGoal(GoalError):
+class InvalidGoal(CheckinsError):
+    pass
+
+
+class CheckinNotFound(CheckinsError):
+    pass
+
+
+class InvalidCheckin(CheckinsError):
+    pass
+
+
+class PhotoMissing(CheckinsError):
     pass
 
 
@@ -71,6 +90,17 @@ def _validate_times_per_week(times_per_week) -> int:
     return times_per_week
 
 
+def _validate_caption(caption):
+    if caption is None:
+        return None
+    caption = caption.strip()
+    if not caption:
+        return None
+    if len(caption) > CAPTION_MAX_LENGTH:
+        raise InvalidCheckin(f"caption must be at most {CAPTION_MAX_LENGTH} characters")
+    return caption
+
+
 def _require_member(conn, user_id: int, group_id: int):
     if not auth_service.group_exists(conn, group_id):
         raise GroupNotFound("group not found")
@@ -85,7 +115,7 @@ def _get_owned_goal(conn, user_id: int, goal_id: int):
     if not auth_service.is_member(conn, goal["group_id"], user_id):
         raise NotGroupMember("not a member of this group")
     if goal["user_id"] != user_id:
-        raise NotGoalOwner("only the goal owner can change it")
+        raise NotGoalOwner("only the goal owner can do this")
     if goal["archived_at"] is not None:
         raise GoalArchived("goal is archived")
     return goal
@@ -130,3 +160,41 @@ def archive_goal(conn, user_id: int, goal_id: int):
     _get_owned_goal(conn, user_id, goal_id)
     repository.set_archived_at(conn, goal_id, utc_now_iso())
     return repository.get_goal_by_id(conn, goal_id)
+
+
+def create_checkin(conn, user_id: int, goal_id: int, photo_file, caption):
+    goal = _get_owned_goal(conn, user_id, goal_id)
+    caption = _validate_caption(caption)
+    photo_path = uploads.save_image(photo_file)
+    try:
+        checkin_id = repository.insert_checkin(
+            conn, goal["id"], photo_path, caption, utc_now_iso()
+        )
+    except Exception:
+        # Don't leave a file that no row points to. If the commit in get_db()
+        # fails later, the file is orphaned anyway: harmless wasted disk, unlike
+        # a row pointing to a missing file (handled by PhotoMissing).
+        uploads.delete_image(photo_path)
+        raise
+    # Phase 4: points.service.record_completion(...) is called here, in-process.
+    # After a service split this call could become a published event.
+    return repository.get_checkin(conn, checkin_id)
+
+
+def list_group_checkins(conn, user_id: int, group_id: int):
+    _require_member(conn, user_id, group_id)
+    return repository.list_checkins_for_group(conn, group_id, FEED_LIMIT)
+
+
+def get_checkin_photo_path(conn, user_id: int, checkin_id: int):
+    """Access-control gate in front of the file: only group members get the path."""
+    checkin = repository.get_checkin(conn, checkin_id)
+    if checkin is None:
+        raise CheckinNotFound("check-in not found")
+    if not auth_service.is_member(conn, checkin["group_id"], user_id):
+        raise NotGroupMember("not a member of this group")
+    path = uploads.resolve_path(checkin["photo_path"])
+    if not path.is_file():
+        logger.warning("check-in %s points to missing photo %s", checkin_id, path)
+        raise PhotoMissing("photo not found")
+    return path
