@@ -2,6 +2,7 @@ import sqlite3
 from contextlib import contextmanager
 
 from app.auth import repository as auth_repository
+from app.checkins import repository as checkins_repository
 from app.config import settings
 
 
@@ -27,3 +28,4 @@ def init_db():
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
         auth_repository.create_tables(conn)
+        checkins_repository.create_tables(conn)
