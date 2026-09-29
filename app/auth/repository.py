@@ -107,3 +107,16 @@ def list_groups_for_user(conn, user_id):
         """,
         (user_id,),
     ).fetchall()
+
+
+def is_group_member(conn, group_id, user_id):
+    row = conn.execute(
+        "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+        (group_id, user_id),
+    ).fetchone()
+    return row is not None
+
+
+def group_exists(conn, group_id):
+    row = conn.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone()
+    return row is not None

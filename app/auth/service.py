@@ -93,3 +93,11 @@ def join_group(conn, user_id: int, invite_code: str):
 
 def list_my_groups(conn, user_id: int):
     return repository.list_groups_for_user(conn, user_id)
+
+
+def is_member(conn, group_id: int, user_id: int) -> bool:
+    return repository.is_group_member(conn, group_id, user_id)
+
+
+def group_exists(conn, group_id: int) -> bool:
+    return repository.group_exists(conn, group_id)
