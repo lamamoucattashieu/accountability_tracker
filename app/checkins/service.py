@@ -8,31 +8,31 @@ MIN_TIMES_PER_WEEK = 1
 MAX_TIMES_PER_WEEK = 7
 
 
-class GoalError(Exception):
-    """Base class for every rule violation in this module."""
+class CheckinsError(Exception):
+    """Base class for every rule violation in the goals & check-ins domain."""
 
 
-class GroupNotFound(GoalError):
+class GroupNotFound(CheckinsError):
     pass
 
 
-class GoalNotFound(GoalError):
+class GoalNotFound(CheckinsError):
     pass
 
 
-class NotGroupMember(GoalError):
+class NotGroupMember(CheckinsError):
     pass
 
 
-class NotGoalOwner(GoalError):
+class NotGoalOwner(CheckinsError):
     pass
 
 
-class GoalArchived(GoalError):
+class GoalArchived(CheckinsError):
     pass
 
 
-class InvalidGoal(GoalError):
+class InvalidGoal(CheckinsError):
     pass
 
 
@@ -85,7 +85,7 @@ def _get_owned_goal(conn, user_id: int, goal_id: int):
     if not auth_service.is_member(conn, goal["group_id"], user_id):
         raise NotGroupMember("not a member of this group")
     if goal["user_id"] != user_id:
-        raise NotGoalOwner("only the goal owner can change it")
+        raise NotGoalOwner("only the goal owner can do this")
     if goal["archived_at"] is not None:
         raise GoalArchived("goal is archived")
     return goal
