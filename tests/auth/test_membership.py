@@ -14,3 +14,5 @@ def test_is_member_and_group_exists(conn):
     assert service.is_member(conn, group_id, alice) is True
     assert service.is_member(conn, group_id, bob) is False
     assert service.is_member(conn, 999, alice) is False
+    assert service.member_count(conn, group_id) == 1
+    assert service.member_count(conn, 999) == 0
