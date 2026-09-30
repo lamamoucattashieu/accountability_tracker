@@ -21,6 +21,10 @@ STATUS_CODES = {
     service.CheckinNotFound: 404,
     service.PhotoMissing: 404,
     service.InvalidCheckin: 422,
+    service.CannotVoteOwnCheckin: 403,
+    service.CheckinAlreadyRejected: 409,
+    service.VotingClosed: 409,
+    service.AlreadyVoted: 409,
     InvalidImage: 415,
     ImageTooLarge: 413,
 }
@@ -134,3 +138,13 @@ def get_checkin_photo(checkin_id: int, user=Depends(get_current_user)):
         except HANDLED_ERRORS as exc:
             raise _to_http_error(exc)
     return FileResponse(path)
+
+
+@router.post("/checkins/{checkin_id}/votes", status_code=201, tags=["checkins"])
+def vote_to_reject(checkin_id: int, user=Depends(get_current_user)):
+    with get_db() as conn:
+        try:
+            result = service.cast_rejection_vote(conn, user["id"], checkin_id)
+        except HANDLED_ERRORS as exc:
+            raise _to_http_error(exc)
+    return result
