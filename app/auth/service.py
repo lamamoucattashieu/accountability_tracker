@@ -101,3 +101,7 @@ def is_member(conn, group_id: int, user_id: int) -> bool:
 
 def group_exists(conn, group_id: int) -> bool:
     return repository.group_exists(conn, group_id)
+
+
+def member_count(conn, group_id: int) -> int:
+    return repository.count_group_members(conn, group_id)

@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS checkins (
     status TEXT NOT NULL DEFAULT 'accepted' CHECK (status IN ('accepted', 'rejected')),
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS checkin_votes (
+    checkin_id INTEGER NOT NULL REFERENCES checkins(id),
+    voter_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    UNIQUE (checkin_id, voter_id)
+);
 """
 
 
@@ -103,3 +110,33 @@ def list_checkins_for_group(conn, group_id, limit):
         """,
         (group_id, limit),
     ).fetchall()
+
+
+def insert_vote(conn, checkin_id, voter_id, created_at):
+    conn.execute(
+        "INSERT INTO checkin_votes (checkin_id, voter_id, created_at) VALUES (?, ?, ?)",
+        (checkin_id, voter_id, created_at),
+    )
+
+
+def has_voted(conn, checkin_id, voter_id):
+    row = conn.execute(
+        "SELECT 1 FROM checkin_votes WHERE checkin_id = ? AND voter_id = ?",
+        (checkin_id, voter_id),
+    ).fetchone()
+    return row is not None
+
+
+def count_votes(conn, checkin_id):
+    return conn.execute(
+        "SELECT COUNT(*) FROM checkin_votes WHERE checkin_id = ?", (checkin_id,)
+    ).fetchone()[0]
+
+
+def mark_rejected(conn, checkin_id):
+    """Flip accepted -> rejected. Returns True only for the call that actually flipped it."""
+    cur = conn.execute(
+        "UPDATE checkins SET status = 'rejected' WHERE id = ? AND status = 'accepted'",
+        (checkin_id,),
+    )
+    return cur.rowcount == 1

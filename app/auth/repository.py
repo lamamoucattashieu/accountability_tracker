@@ -120,3 +120,9 @@ def is_group_member(conn, group_id, user_id):
 def group_exists(conn, group_id):
     row = conn.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone()
     return row is not None
+
+
+def count_group_members(conn, group_id):
+    return conn.execute(
+        "SELECT COUNT(*) FROM group_members WHERE group_id = ?", (group_id,)
+    ).fetchone()[0]

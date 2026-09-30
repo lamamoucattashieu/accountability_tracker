@@ -1,7 +1,10 @@
 import logging
+import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from app.auth import service as auth_service
 from app.checkins import repository
+from app.points import service as points_service
 from app.shared import uploads
 from app.shared.timeutils import utc_now_iso
 
@@ -13,6 +16,7 @@ MIN_TIMES_PER_WEEK = 1
 MAX_TIMES_PER_WEEK = 7
 CAPTION_MAX_LENGTH = 200
 FEED_LIMIT = 50
+VOTING_WINDOW = timedelta(hours=48)
 
 
 class CheckinsError(Exception):
@@ -53,6 +57,39 @@ class InvalidCheckin(CheckinsError):
 
 class PhotoMissing(CheckinsError):
     pass
+
+
+class CannotVoteOwnCheckin(CheckinsError):
+    pass
+
+
+class CheckinAlreadyRejected(CheckinsError):
+    pass
+
+
+class VotingClosed(CheckinsError):
+    pass
+
+
+class AlreadyVoted(CheckinsError):
+    pass
+
+
+# --- rejection rule: pure functions, no database ---
+
+def votes_needed(eligible_voters: int) -> int:
+    """A strict majority of the members who may vote (everyone except the author)."""
+    return eligible_voters // 2 + 1
+
+
+def is_rejected(reject_votes: int, eligible_voters: int) -> bool:
+    if eligible_voters == 0:
+        return False  # solo group: nobody else can vote, so nothing is ever rejected
+    return reject_votes >= votes_needed(eligible_voters)
+
+
+def is_voting_open(posted_at: datetime, now: datetime) -> bool:
+    return now < posted_at + VOTING_WINDOW
 
 
 def _validate_title(title) -> str:
@@ -198,3 +235,50 @@ def get_checkin_photo_path(conn, user_id: int, checkin_id: int):
         logger.warning("check-in %s points to missing photo %s", checkin_id, path)
         raise PhotoMissing("photo not found")
     return path
+
+
+def _check_can_vote(conn, voter_id: int, checkin):
+    if not auth_service.is_member(conn, checkin["group_id"], voter_id):
+        raise NotGroupMember("not a member of this group")
+    if checkin["user_id"] == voter_id:
+        raise CannotVoteOwnCheckin("you cannot vote on your own check-in")
+    if checkin["status"] == "rejected":
+        raise CheckinAlreadyRejected("check-in is already rejected")
+    posted_at = datetime.fromisoformat(checkin["created_at"])
+    if not is_voting_open(posted_at, datetime.now(timezone.utc)):
+        raise VotingClosed("voting on this check-in has closed")
+    if repository.has_voted(conn, checkin["id"], voter_id):
+        raise AlreadyVoted("you already voted on this check-in")
+
+
+def cast_rejection_vote(conn, voter_id: int, checkin_id: int) -> dict:
+    """Record a vote to reject a check-in, and reject it once the majority is reached.
+
+    Everything below runs on one connection: the vote insert, the status change
+    and revoke_completion commit together in get_db(), or not at all. The checks
+    in _check_can_vote run before that transaction starts, so two simultaneous
+    votes can both pass them; the worst case is one extra vote row on a check-in
+    that was just rejected. Status and revoke_completion stay correct because
+    mark_rejected only succeeds for one transaction.
+    """
+    checkin = repository.get_checkin(conn, checkin_id)
+    if checkin is None:
+        raise CheckinNotFound("check-in not found")
+    _check_can_vote(conn, voter_id, checkin)
+    try:
+        repository.insert_vote(conn, checkin_id, voter_id, utc_now_iso())
+    except sqlite3.IntegrityError:
+        raise AlreadyVoted("you already voted on this check-in")
+
+    reject_votes = repository.count_votes(conn, checkin_id)
+    eligible_voters = auth_service.member_count(conn, checkin["group_id"]) - 1
+    status = checkin["status"]
+    if is_rejected(reject_votes, eligible_voters) and repository.mark_rejected(conn, checkin_id):
+        status = "rejected"
+        points_service.revoke_completion(conn, checkin_id)
+    return {
+        "checkin_id": checkin_id,
+        "status": status,
+        "reject_votes": reject_votes,
+        "votes_needed": votes_needed(eligible_voters),
+    }
