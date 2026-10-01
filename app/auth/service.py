@@ -110,3 +110,9 @@ def member_count(conn, group_id: int) -> int:
 def list_members(conn, group_id: int) -> list[dict]:
     """Plain dicts, not database rows, so callers in other domains don't depend on our tables."""
     return [dict(row) for row in repository.list_group_members(conn, group_id)]
+
+
+def group_created_at(conn, group_id: int):
+    """ISO 8601 UTC creation time of a group, or None if it doesn't exist."""
+    group = repository.get_group_by_id(conn, group_id)
+    return None if group is None else group["created_at"]

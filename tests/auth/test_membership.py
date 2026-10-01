@@ -16,4 +16,8 @@ def test_is_member_and_group_exists(conn):
     assert service.is_member(conn, 999, alice) is False
     assert service.member_count(conn, group_id) == 1
     assert service.member_count(conn, 999) == 0
-    assert service.list_members(conn, group_id) == [{"id": alice, "username": "alice"}]
+    assert service.list_members(conn, group_id) == [
+        {"id": alice, "username": "alice", "joined_at": now}
+    ]
+    assert service.group_created_at(conn, group_id) == now
+    assert service.group_created_at(conn, 999) is None
