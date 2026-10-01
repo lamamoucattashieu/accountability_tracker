@@ -20,9 +20,9 @@ def get_leaderboard(
     group_id: int, week: Optional[date] = None, user=Depends(get_current_user)
 ):
     """Ranking for the week containing `week` (any day of it), or the current week."""
-    day = week or datetime.now(timezone.utc).date()
+    now = datetime.now(timezone.utc)
     with get_db() as conn:
         try:
-            return service.get_leaderboard(conn, user["id"], group_id, day)
+            return service.get_leaderboard(conn, user["id"], group_id, week or now.date(), now)
         except service.PointsError as exc:
             raise HTTPException(status_code=STATUS_CODES[type(exc)], detail=str(exc))

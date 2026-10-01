@@ -5,7 +5,8 @@ import pytest
 from app.points import service
 from tests.factories import make_group, make_user
 
-LONG_AGO = "2026-08-03T09:00:00+00:00"  # a Monday, well before every week used in these tests
+# Sunday of the week starting 2026-09-14: everyone is eligible from the week of 2026-09-21.
+GROUP_CREATED = "2026-09-20T09:00:00+00:00"
 
 
 @pytest.fixture
@@ -29,11 +30,11 @@ def people(conn):
 
 @pytest.fixture
 def group(conn, people):
-    """A group created, and joined by everyone, long before the test weeks."""
+    """A group created, and joined by everyone, on GROUP_CREATED."""
     group_id = make_group(conn, *people.values())
-    backdate_group(conn, group_id, LONG_AGO)
+    backdate_group(conn, group_id, GROUP_CREATED)
     for user_id in people.values():
-        backdate_join(conn, group_id, user_id, LONG_AGO)
+        backdate_join(conn, group_id, user_id, GROUP_CREATED)
     conn.commit()
     return group_id
 
@@ -58,9 +59,13 @@ def utc(*parts):
 
 
 def complete(conn, checkin_id, user_id, group_id, completed_at, goal_id=None, times_per_week=3):
-    """Record one completion for user_id (one goal per user unless goal_id is given)."""
+    """Record one completion for user_id (one goal per user unless goal_id is given).
+
+    Returns the checkin_id, so tests can revoke it later.
+    """
     service.record_completion(
         conn, checkin_id=checkin_id, group_id=group_id, user_id=user_id,
         goal_id=goal_id if goal_id is not None else user_id,
         times_per_week=times_per_week, completed_at=completed_at,
     )
+    return checkin_id

@@ -185,3 +185,62 @@ def list_forfeits(conn, group_id):
     return conn.execute(
         "SELECT * FROM forfeits WHERE group_id = ? ORDER BY created_at, id", (group_id,)
     ).fetchall()
+
+
+# --- settlements ---
+
+def settled_week_starts(conn, group_id):
+    rows = conn.execute(
+        "SELECT week_start FROM settlements WHERE group_id = ?", (group_id,)
+    ).fetchall()
+    return {row["week_start"] for row in rows}
+
+
+def get_settlement(conn, group_id, week_start):
+    return conn.execute(
+        "SELECT * FROM settlements WHERE group_id = ? AND week_start = ?", (group_id, week_start)
+    ).fetchone()
+
+
+def insert_settlement(conn, group_id, week_start, forfeit_id, settled_at):
+    cur = conn.execute(
+        """
+        INSERT INTO settlements (group_id, week_start, forfeit_id, settled_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (group_id, week_start, forfeit_id, settled_at),
+    )
+    return cur.lastrowid
+
+
+def insert_assignment(conn, settlement_id, user_id, score):
+    conn.execute(
+        "INSERT INTO forfeit_assignments (settlement_id, user_id, score) VALUES (?, ?, ?)",
+        (settlement_id, user_id, score),
+    )
+
+
+def list_settlements(conn, group_id):
+    return conn.execute(
+        """
+        SELECT settlements.*, forfeits.text AS forfeit_text
+        FROM settlements
+        LEFT JOIN forfeits ON forfeits.id = settlements.forfeit_id
+        WHERE settlements.group_id = ?
+        ORDER BY settlements.week_start DESC
+        """,
+        (group_id,),
+    ).fetchall()
+
+
+def list_assignments(conn, group_id):
+    return conn.execute(
+        """
+        SELECT forfeit_assignments.*, settlements.settled_at
+        FROM forfeit_assignments
+        JOIN settlements ON settlements.id = forfeit_assignments.settlement_id
+        WHERE settlements.group_id = ?
+        ORDER BY forfeit_assignments.settlement_id, forfeit_assignments.user_id
+        """,
+        (group_id,),
+    ).fetchall()
