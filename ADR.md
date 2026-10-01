@@ -16,10 +16,85 @@ Decision: Each domain owns its tables and exposes a service layer; other code ma
 Alternatives considered: Letting app/checkins/repository.py query group_members directly (simpler, one JOIN). Rejected because it couples Check-ins to auth's table layout, so a service split would mean rewriting SQL instead of replacing one function with an HTTP call. A separate SQLite file per domain was also rejected: the spec requires one SQLite file at one path, and it would lose cross-domain transactions immediately rather than at split time.
 Consequences: A future split mostly changes the seam functions, plus dropping the cross-domain foreign keys (goals → users/groups) and handling what one SQLite transaction currently gives for free: a check-in and its point event being written together. Day to day, it costs cross-domain JOINs: the goals list returns user_id rather than username, and some checks need extra queries.
 
-## 3. Goals & check-ins schema: soft-archived goals, check-ins linked only to goals
-Date: 2026-09-30
+## 3. Data model: soft-archived goals, and a points ledger linked to check-ins by id only
+Date: 2026-10-01
 Status: Decided
-Context: Check-ins, and later point events, must keep pointing at the goal they proved even after its owner stops pursuing it. There is no migration tool, so any column a later phase needs has to exist from the start.
-Decision: Goals are never deleted: archiving sets archived_at, and the active-goal list filters on archived_at IS NULL. A check-in stores only goal_id, a photo path relative to DATA_DIR, and a status column (default 'accepted', CHECK accepted/rejected) for Phase 3 voting; its group and owner are derived by joining goals, which belongs to the same domain.
-Alternatives considered: Hard-deleting goals with ON DELETE CASCADE, rejected because it would silently erase check-ins and the points history built on them. Copying group_id and user_id onto every check-in, rejected because the copies could drift from the goal and the JOIN is cheap inside one domain. Storing absolute photo paths, rejected because they break when DATA_DIR moves, e.g. into the Azure container.
-Consequences: History survives archiving, and Phase 3 can use the status column without changing the table. In exchange, every active-goal query must remember the archived_at IS NULL filter, and feed and photo lookups always need the join to goals.
+Context: Check-ins and their points must keep pointing at the goal and check-in they came from even after a goal is archived or a check-in is rejected, and there is no migration tool, so columns later phases need must exist from the start. Points also needs per-check-in data without reading the check-ins tables (ADR-2).
+Decision: Goals are soft-archived (archived_at), and a check-in stores only goal_id, a photo path relative to DATA_DIR and a status column for voting, with its group and owner derived by a same-domain JOIN. Points keeps a ledger, point_events, with one row per check-in (UNIQUE checkin_id, revoked_at on rejection) that holds other domains' ids without foreign keys, and weekly scores and streak bonuses are computed from it in SQL rather than stored.
+Alternatives considered: Hard-deleting goals with ON DELETE CASCADE, rejected because it would erase check-ins and their points. Storing weekly totals per member, rejected because incrementing is not idempotent and a rejection could not free a capped slot, rescore a past week or end a streak without recounting. Foreign keys from point_events to check-ins, rejected because they tie Points to the check-ins schema and would have to be dropped in a split.
+Consequences: History survives archiving and rejection, scoring a check-in twice is impossible at the database level, and rankings and streaks always match the events. In exchange, every leaderboard read recomputes two weeks with window functions, and the database cannot stop point_events from holding an id that does not exist in another domain.
+
+Diagram for ADR-3 (solid lines are foreign keys; the dotted line is the domain seam, an id with no foreign key, written only through points.service.record_completion):
+
+```mermaid
+erDiagram
+    users ||--o{ sessions : has
+    users ||--o{ group_members : joins
+    groups ||--o{ group_members : has
+    users ||--o{ groups : creates
+    groups ||--o{ goals : contains
+    users ||--o{ goals : owns
+    goals ||--o{ checkins : "proved by"
+    checkins ||--o{ checkin_votes : receives
+    users ||--o{ checkin_votes : casts
+    checkins ||..o| point_events : "checkin_id (no FK)"
+
+    users {
+        int id PK
+        text username UK
+        text password_hash
+        text created_at
+    }
+    sessions {
+        text id PK
+        int user_id FK
+        text created_at
+        text expires_at
+    }
+    groups {
+        int id PK
+        text name
+        text invite_code UK
+        int created_by FK
+        text created_at
+    }
+    group_members {
+        int group_id PK, FK
+        int user_id PK, FK
+        text joined_at
+    }
+    goals {
+        int id PK
+        int group_id FK
+        int user_id FK
+        text title
+        text description
+        int times_per_week "CHECK 1-7"
+        text created_at
+        text archived_at "NULL = active"
+    }
+    checkins {
+        int id PK
+        int goal_id FK
+        text photo_path "relative to DATA_DIR"
+        text caption
+        text status "CHECK accepted or rejected"
+        text created_at
+    }
+    checkin_votes {
+        int checkin_id FK "UNIQUE with voter_id"
+        int voter_id FK
+        text created_at
+    }
+    point_events {
+        int id PK
+        int checkin_id UK "no FK"
+        int group_id "no FK"
+        int user_id "no FK"
+        int goal_id "no FK"
+        int times_per_week "CHECK 1-7"
+        text week_start "CHECK is a Monday"
+        text completed_at
+        text revoked_at "NULL = counts"
+    }
+```

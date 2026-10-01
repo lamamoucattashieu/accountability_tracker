@@ -7,6 +7,7 @@ from app.auth.routes import groups_router, router as auth_router
 from app.checkins.routes import router as goals_router
 from app.config import settings
 from app.db import init_db
+from app.points.routes import router as points_router
 
 
 @asynccontextmanager
@@ -19,6 +20,7 @@ app = FastAPI(title="Accountability Tracker", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(groups_router)
 app.include_router(goals_router)
+app.include_router(points_router)
 
 
 @app.get("/health")

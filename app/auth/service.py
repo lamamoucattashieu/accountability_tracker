@@ -105,3 +105,8 @@ def group_exists(conn, group_id: int) -> bool:
 
 def member_count(conn, group_id: int) -> int:
     return repository.count_group_members(conn, group_id)
+
+
+def list_members(conn, group_id: int) -> list[dict]:
+    """Plain dicts, not database rows, so callers in other domains don't depend on our tables."""
+    return [dict(row) for row in repository.list_group_members(conn, group_id)]

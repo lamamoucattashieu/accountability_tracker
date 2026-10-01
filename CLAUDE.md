@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-2 are done and merged (PRs #1-#5). **Phase 3** is implemented on
-`feat/phase-3-rejection-votes`, awaiting my review.
+**Current status:** Phases 0-3 are done and merged (PRs #1-#6). **Phase 4** is implemented on
+`feat/phase-4-points`, waiting for its PR to be merged. Next: Phase 5 (forfeits).
 
 ---
 
@@ -131,9 +131,9 @@ Never decide these. If one is blank when a phase needs it, stop and ask me.
 | Voting time window | Phase 3 | 48 hours from posting; open while `now < posted_at + 48h`, closed at exactly 48h (409) |
 | Can a vote be changed or withdrawn? Can a rejection be undone? | Phase 3 | No and no: votes are final (duplicate = 409), and rejected is a terminal state (further votes = 409) |
 | Small-group edge case (e.g. 2 members) | Phase 3 | The rule applies as-is: in a 2-person group the other member alone rejects; in a solo group nothing can be rejected |
-| What a "week" is: start day, timezone, boundary time | Phase 4 | |
-| What earns points: each valid check-in, or meeting a goal's weekly target | Phase 4 | |
-| Point values, and whether streaks give bonuses | Phase 4 | |
+| What a "week" is: start day, timezone, boundary time | Phase 4 | A check-in's `created_at` decides its week; weeks run Monday 00:00 UTC to Sunday 23:59:59 UTC |
+| What earns points: each valid check-in, or meeting a goal's weekly target | Phase 4 | Each accepted check-in, but only the first `times_per_week` per goal per week; a rejected one frees its slot for a later one |
+| Point values, and whether streaks give bonuses | Phase 4 | 1 point per counted check-in (`POINTS_PER_COMPLETION`). Streak bonus: +1 (`STREAK_BONUS`) per goal that hit its full weekly target this week and the previous week; flat, not growing |
 | Tie-breaking for lowest score | Phase 5 | |
 | How the forfeit is agreed and when it locks | Phase 5 | |
 | What happens if the loser never posts proof | Phase 5 | |
@@ -189,6 +189,26 @@ Recorded so later phases stay consistent with them. Each one was an open questio
   extra vote row on a just-rejected check-in. Status and "revoke exactly once" stay correct,
   because `mark_rejected` (`UPDATE ... WHERE status = 'accepted'`) succeeds for only one transaction.
 
+**Phase 4: Weekly scoring & leaderboard** (besides the table above)
+- Ties share a rank with gaps (`RANK()`: 1, 1, 3). Members with zero points are shown, ranked last.
+- A rejection after its week ended rescores that old week (and can end a streak). Points from a
+  goal archived later are kept.
+- Members only (404 missing group, then 403), for the current week or any week via
+  `?week=YYYY-MM-DD` (any day of it).
+- Streaks are per goal: a goal "hits" a week when its valid check-ins reach the target stored on
+  that week's latest check-in. Recomputed on every read, never stored.
+- Storage is a ledger, `point_events` (one row per check-in, `revoked_at` on rejection), not stored
+  weekly totals, because the cap, freed slots, late rejections and streaks need recomputing.
+  It has no foreign keys to other domains' tables.
+- Idempotency is enforced in SQL: `ON CONFLICT (checkin_id) DO NOTHING` (not `INSERT OR IGNORE`,
+  which would also hide CHECK violations) and `UPDATE ... WHERE revoked_at IS NULL`.
+- The seam signature is fixed as `record_completion(conn, *, checkin_id, group_id, user_id,
+  goal_id, times_per_week, completed_at)`. `conn` and `times_per_week` are deliberate exceptions to
+  "only IDs and timestamps", because Points needs the target as it was at check-in time.
+- `create_checkin` deletes the photo if either the insert or `record_completion` fails.
+- New auth seam function `list_members` (plain dicts of id and username). No backfill of points
+  for check-ins made before Phase 4.
+
 ---
 
 ## Phases
@@ -204,13 +224,14 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    - 2b, PR #4: photo check-ins, newest-first feed, member-only photo access, and the shared
      `app/shared/uploads.py` facade.
    - ADR-2 and ADR-3 were written from these phases (PRs #3 and #5).
-3. **Rejection votes:** voting endpoint, the rejection rule as a pure function, an atomic
-   vote + status change, and `revoke_completion` called exactly once per rejection.
+3. **Rejection votes** (done, PR #6): voting endpoint, the rejection rule as a pure function, an
+   atomic vote + status change, and `revoke_completion` called exactly once per rejection.
    *Done when:* the rule is unit-tested at the threshold boundary; duplicate votes, author votes,
    non-member votes, closed-window votes, and votes on rejected check-ins are all rejected
    correctly; tests prove `revoke_completion` fires once.
-4. **Weekly scoring & leaderboard:** real `record_completion` / `revoke_completion`, weekly
-   totals, and ranking computed in SQL.
+4. **Weekly scoring & leaderboard** (implemented on `feat/phase-4-points`): real
+   `record_completion` / `revoke_completion`, weekly totals, and ranking computed in SQL, plus
+   the streak bonus. ADR-3 was revised to cover the points ledger and the database diagram.
    *Done when:* scoring is unit-tested across week boundaries and revocations; the leaderboard
    endpoint returns a correct ranking.
 5. **Forfeits:** forfeit set in advance per group, lazy settlement, and the loser uploads proof.
