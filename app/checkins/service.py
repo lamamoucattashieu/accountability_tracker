@@ -1,9 +1,10 @@
 import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.auth import service as auth_service
 from app.checkins import repository
+from app.config import VOTING_WINDOW
 from app.points import service as points_service
 from app.shared import uploads
 from app.shared.timeutils import utc_now_iso
@@ -16,7 +17,6 @@ MIN_TIMES_PER_WEEK = 1
 MAX_TIMES_PER_WEEK = 7
 CAPTION_MAX_LENGTH = 200
 FEED_LIMIT = 50
-VOTING_WINDOW = timedelta(hours=48)
 
 
 class CheckinsError(Exception):

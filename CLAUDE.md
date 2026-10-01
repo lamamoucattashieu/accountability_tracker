@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-3 are done and merged (PRs #1-#6). **Phase 4** is implemented on
-`feat/phase-4-points`, waiting for its PR to be merged. Next: Phase 5 (forfeits).
+**Current status:** Phases 0-4 are done and merged (PRs #1-#7). **Phase 5** (forfeits) is in
+progress on `feat/phase-5-forfeits`.
 
 ---
 
@@ -74,7 +74,7 @@ driven by one of these, name it in one line (in the plan or the walkthrough, not
 - **Lazy settlement (no cron):** the first request after a week ends settles it. A UNIQUE
   constraint on `(group_id, week_start)` makes double settlement impossible at the database
   level, not just in code.
-- Owns tables: `point_events`, `forfeits`, `forfeit_assignments`
+- Owns tables: `point_events`, `forfeits`, `settlements`, `forfeit_assignments`
 
 ### Shared (not a domain)
 - `app/auth/`: users, groups, invite codes, sessions
@@ -134,10 +134,10 @@ Never decide these. If one is blank when a phase needs it, stop and ask me.
 | What a "week" is: start day, timezone, boundary time | Phase 4 | A check-in's `created_at` decides its week; weeks run Monday 00:00 UTC to Sunday 23:59:59 UTC |
 | What earns points: each valid check-in, or meeting a goal's weekly target | Phase 4 | Each accepted check-in, but only the first `times_per_week` per goal per week; a rejected one frees its slot for a later one |
 | Point values, and whether streaks give bonuses | Phase 4 | 1 point per counted check-in (`POINTS_PER_COMPLETION`). Streak bonus: +1 (`STREAK_BONUS`) per goal that hit its full weekly target this week and the previous week; flat, not growing |
-| Tie-breaking for lowest score | Phase 5 | |
-| How the forfeit is agreed and when it locks | Phase 5 | |
-| What happens if the loser never posts proof | Phase 5 | |
-| Whether members with zero check-ins can "lose" | Phase 5 | |
+| Tie-breaking for lowest score | Phase 5 | No tie-break: everyone tied at the lowest score shares the forfeit, each with their own proof. If every eligible member has the same score (including all zero), nobody loses. No random tie-break (untestable, feels unfair) |
+| How the forfeit is agreed and when it locks | Phase 5 | Any member sets it (text, trimmed, 1-200 chars, else 422). Append-only, never edited. A week's forfeit is the latest one set before that week's Monday 00:00 UTC, so it locks when the week starts; a mid-week change applies from next week |
+| What happens if the loser never posts proof | Phase 5 | Deadline: 7 days after the settlement's settled_at. Overdue is computed on read, never stored. Late proof is accepted and shown as late. No point penalty, so scoring stays independent of forfeits |
+| Whether members with zero check-ins can "lose" | Phase 5 | Yes; otherwise not participating would be a way out |
 
 Anything that turns into a real trade-off is a candidate ADR entry. Point it out when it happens.
 
@@ -209,6 +209,38 @@ Recorded so later phases stay consistent with them. Each one was an open questio
 - New auth seam function `list_members` (plain dicts of id and username). No backfill of points
   for check-ins made before Phase 4.
 
+**Phase 5: Forfeits** (besides the table above)
+- Settlement time: a week settles only once `now >= week end + 48h` (Wednesday 00:00 UTC), when
+  every voting window for its check-ins has closed, so its ranking can no longer change. After
+  that it is final. Until then the leaderboard marks that week as provisional.
+- Eligibility: members at settlement time who joined before the week started. Known limitation:
+  there is no leave feature, so eligibility is "current members who joined before the week".
+- No forfeit set: the week is still settled (so it isn't retried on every request) with no
+  assignment, and the response says no forfeit was set.
+- Backlog: when triggered, every settleable week since the group was created is settled, oldest
+  first, each in its own transaction. Weeks before the group existed are never settled, and the
+  creation week has no losers (nobody joined before it started).
+- Visibility: group members see settlements, assignments, proof status and proof photos (404 for a
+  missing group, then 403). Only the assigned member uploads proof, and only once (409 after).
+  Nobody votes on proof: deliberately not built.
+- Tables: `settlements` (one row per group and week, `UNIQUE (group_id, week_start)`, nullable
+  `forfeit_id`, `settled_at`) and `forfeit_assignments` (one row per loser,
+  `UNIQUE (settlement_id, user_id)`, the losing `score` frozen at settlement, proof path and time).
+- Settlement runs inside the points service through one function, `ensure_settled(conn, group_id,
+  now)`, never from route handlers. It is the first call before any other write in every function
+  that uses it, and it refuses to start if `conn.in_transaction` is true, so it can never commit a
+  caller's half-done work. **This is the one documented exception to the 2b rule that commits stay
+  in `get_db()`**: each backlog week commits on its own.
+- A GET (the leaderboard, forfeit and settlement reads) can write settlements. Accepted REST
+  smell, because lazy settlement has no other trigger; settling is idempotent.
+- Pure rules live in `app/points/rules.py` (single responsibility: rules separate from the
+  service that orchestrates them).
+- The 48h voting window, the settlement delay (defined as the voting window, so they can't drift
+  apart), the 7-day proof deadline and the 200-char forfeit limit are named constants in
+  `config.py`.
+- Seam changes: `get_leaderboard` takes `now` and returns `provisional`; `auth_service.list_members`
+  also returns `joined_at`; new `auth_service.group_created_at`.
+
 ---
 
 ## Phases
@@ -234,7 +266,8 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    the streak bonus. ADR-3 was revised to cover the points ledger and the database diagram.
    *Done when:* scoring is unit-tested across week boundaries and revocations; the leaderboard
    endpoint returns a correct ranking.
-5. **Forfeits:** forfeit set in advance per group, lazy settlement, and the loser uploads proof.
+5. **Forfeits** (in progress on `feat/phase-5-forfeits`): forfeit set in advance per group, lazy
+   settlement, and the loser uploads proof.
    *Done when:* settlement is tested for ties, empty weeks, and concurrent first requests (the
    UNIQUE constraint holds); proof upload reuses `app/shared/uploads.py`.
 6. **Frontend:** simple HTML/JS pages for everything above. If time is short, cut to the minimum

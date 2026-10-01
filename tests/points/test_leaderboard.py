@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from itertools import count
 
 import pytest
@@ -9,6 +9,14 @@ from tests.factories import make_group, make_user
 THIS_WEEK = date(2026, 9, 28)
 NEXT_WEEK = date(2026, 10, 5)
 _checkin_ids = count(1)
+# Before any of these groups exist (they are created at the real time the tests
+# run), so no week is settleable and these tests are about scoring only.
+NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+
+
+def leaderboard(conn, viewer, group_id, day):
+    conn.commit()  # like a new request: settlement never starts inside an open transaction
+    return service.get_leaderboard(conn, viewer, group_id, day, NOW)
 
 
 @pytest.fixture
@@ -36,7 +44,7 @@ def complete(conn, group_id):
 
 def board(conn, viewer, group_id, day=THIS_WEEK):
     """The leaderboard as (username, points, rank) tuples, for short assertions."""
-    result = service.get_leaderboard(conn, viewer, group_id, day)
+    result = leaderboard(conn, viewer, group_id, day)
     return [(e["username"], e["points"], e["rank"]) for e in result["entries"]]
 
 
@@ -95,7 +103,7 @@ def test_completion_just_before_and_after_the_boundary(conn, users, group_id, co
 
 def test_any_day_selects_its_whole_week(conn, users, group_id, complete):
     complete(users["alice"], goal_id=1, at="2026-09-28T08:00:00+00:00")
-    result = service.get_leaderboard(conn, users["alice"], group_id, date(2026, 10, 4))
+    result = leaderboard(conn, users["alice"], group_id, date(2026, 10, 4))
     assert result["week_start"] == "2026-09-28"
     assert result["entries"][0]["points"] == 1
 
@@ -172,12 +180,12 @@ def test_other_groups_points_are_not_counted(conn, users, group_id, complete):
 def test_non_member_cannot_see_the_leaderboard(conn, group_id):
     outsider = make_user(conn, "outsider")
     with pytest.raises(service.NotGroupMember):
-        service.get_leaderboard(conn, outsider, group_id, THIS_WEEK)
+        leaderboard(conn, outsider, group_id, THIS_WEEK)
 
 
 def test_leaderboard_of_missing_group_is_not_found(conn, users):
     with pytest.raises(service.GroupNotFound):
-        service.get_leaderboard(conn, users["alice"], 999, THIS_WEEK)
+        leaderboard(conn, users["alice"], 999, THIS_WEEK)
 
 
 # --- streak bonus ---
@@ -193,7 +201,7 @@ def hit(complete, user_id, goal_id, at, times_per_week=2):
 
 
 def entry(conn, viewer, group_id, username, day=THIS_WEEK):
-    result = service.get_leaderboard(conn, viewer, group_id, day)
+    result = leaderboard(conn, viewer, group_id, day)
     return next(e for e in result["entries"] if e["username"] == username)
 
 

@@ -131,7 +131,7 @@ def count_group_members(conn, group_id):
 def list_group_members(conn, group_id):
     return conn.execute(
         """
-        SELECT users.id, users.username FROM group_members
+        SELECT users.id, users.username, group_members.joined_at FROM group_members
         JOIN users ON users.id = group_members.user_id
         WHERE group_members.group_id = ?
         ORDER BY users.id

@@ -185,8 +185,9 @@ def test_rejection_by_vote_removes_the_points_from_the_leaderboard(
 ):
     """End to end through the real seam: no recorder replaces revoke_completion here."""
     def alice_points():
-        week_day = datetime.fromisoformat(checkin["created_at"]).date()
-        board = points_service.get_leaderboard(conn, bob, four_person_group, week_day)
+        posted = datetime.fromisoformat(checkin["created_at"])
+        conn.commit()  # like a new request: settlement never starts inside an open transaction
+        board = points_service.get_leaderboard(conn, bob, four_person_group, posted.date(), posted)
         return next(e["points"] for e in board["entries"] if e["user_id"] == alice)
 
     assert alice_points() == 1
