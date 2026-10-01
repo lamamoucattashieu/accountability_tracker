@@ -203,18 +203,29 @@ def create_checkin(conn, user_id: int, goal_id: int, photo_file, caption):
     goal = _get_owned_goal(conn, user_id, goal_id)
     caption = _validate_caption(caption)
     photo_path = uploads.save_image(photo_file)
+    created_at = utc_now_iso()
     try:
         checkin_id = repository.insert_checkin(
-            conn, goal["id"], photo_path, caption, utc_now_iso()
+            conn, goal["id"], photo_path, caption, created_at
+        )
+        # In-process call to the Points seam, in this same transaction. After a
+        # service split this could become a published event.
+        points_service.record_completion(
+            conn,
+            checkin_id=checkin_id,
+            group_id=goal["group_id"],
+            user_id=user_id,
+            goal_id=goal["id"],
+            times_per_week=goal["times_per_week"],
+            completed_at=created_at,
         )
     except Exception:
-        # Don't leave a file that no row points to. If the commit in get_db()
-        # fails later, the file is orphaned anyway: harmless wasted disk, unlike
-        # a row pointing to a missing file (handled by PhotoMissing).
+        # Either write failed, so the transaction won't commit: don't leave a
+        # file that no row points to. If the commit in get_db() fails later, the
+        # file is orphaned anyway: harmless wasted disk, unlike a row pointing
+        # to a missing file (handled by PhotoMissing).
         uploads.delete_image(photo_path)
         raise
-    # Phase 4: points.service.record_completion(...) is called here, in-process.
-    # After a service split this call could become a published event.
     return repository.get_checkin(conn, checkin_id)
 
 

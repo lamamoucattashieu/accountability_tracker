@@ -178,3 +178,18 @@ def test_failed_revoke_rolls_back_vote_and_status(conn, bob, carol, checkin, mon
 
     assert repository.count_votes(conn, checkin["id"]) == 1  # carol's vote was rolled back
     assert status_of(conn, checkin["id"]) == "accepted"
+
+
+def test_rejection_by_vote_removes_the_points_from_the_leaderboard(
+    conn, alice, bob, carol, four_person_group, checkin
+):
+    """End to end through the real seam: no recorder replaces revoke_completion here."""
+    def alice_points():
+        week_day = datetime.fromisoformat(checkin["created_at"]).date()
+        board = points_service.get_leaderboard(conn, bob, four_person_group, week_day)
+        return next(e["points"] for e in board["entries"] if e["user_id"] == alice)
+
+    assert alice_points() == 1
+    service.cast_rejection_vote(conn, bob, checkin["id"])
+    service.cast_rejection_vote(conn, carol, checkin["id"])
+    assert alice_points() == 0

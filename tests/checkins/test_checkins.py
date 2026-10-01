@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from app.checkins import repository, service
+from app.points import service as points_service
 from app.shared import uploads
 from tests.factories import make_group
 from tests.images import image_file
@@ -157,3 +158,26 @@ def test_missing_photo_file_is_not_found_and_logged(conn, data_dir, alice, check
     with pytest.raises(service.PhotoMissing):
         service.get_checkin_photo_path(conn, alice, checkin["id"])
     assert "missing photo" in caplog.text
+
+
+# --- points seam ---
+
+def test_new_checkin_is_recorded_in_points(conn, alice, group_id, goal, checkin):
+    event = conn.execute(
+        "SELECT * FROM point_events WHERE checkin_id = ?", (checkin["id"],)
+    ).fetchone()
+    assert event["user_id"] == alice
+    assert event["group_id"] == group_id
+    assert event["goal_id"] == goal["id"]
+    assert event["times_per_week"] == goal["times_per_week"]
+    assert event["completed_at"] == checkin["created_at"]
+
+
+def test_photo_is_deleted_when_recording_points_fails(conn, data_dir, alice, goal, monkeypatch):
+    def failing_record(conn, **completion):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(points_service, "record_completion", failing_record)
+    with pytest.raises(sqlite3.OperationalError):
+        service.create_checkin(conn, alice, goal["id"], image_file(), None)
+    assert stored_files(data_dir) == []
