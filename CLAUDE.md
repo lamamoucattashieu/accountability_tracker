@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-4 are done and merged (PRs #1-#7). **Phase 5** (forfeits) is in
-progress on `feat/phase-5-forfeits`.
+**Current status:** Phases 0-5 are done and merged (PRs #1-#8), so both domains are complete.
+Next: **Phase 6** (frontend), then Phase 7 (hardening & docs).
 
 ---
 
@@ -261,13 +261,13 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    *Done when:* the rule is unit-tested at the threshold boundary; duplicate votes, author votes,
    non-member votes, closed-window votes, and votes on rejected check-ins are all rejected
    correctly; tests prove `revoke_completion` fires once.
-4. **Weekly scoring & leaderboard** (implemented on `feat/phase-4-points`): real
+4. **Weekly scoring & leaderboard** (done, PR #7): real
    `record_completion` / `revoke_completion`, weekly totals, and ranking computed in SQL, plus
    the streak bonus. ADR-3 was revised to cover the points ledger and the database diagram.
    *Done when:* scoring is unit-tested across week boundaries and revocations; the leaderboard
    endpoint returns a correct ranking.
-5. **Forfeits** (in progress on `feat/phase-5-forfeits`): forfeit set in advance per group, lazy
-   settlement, and the loser uploads proof.
+5. **Forfeits** (done, PR #8): forfeit set in advance per group, lazy settlement, and the loser
+   uploads proof.
    *Done when:* settlement is tested for ties, empty weeks, and concurrent first requests (the
    UNIQUE constraint holds); proof upload reuses `app/shared/uploads.py`.
 6. **Frontend:** simple HTML/JS pages for everything above. If time is short, cut to the minimum
