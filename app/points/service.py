@@ -5,10 +5,11 @@ published event. Only IDs (and the shared connection, so both domains' writes
 commit in one transaction) cross it.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from app.auth import service as auth_service
 from app.points import repository
+from app.points.rules import monday_of, week_start_for
 from app.shared.timeutils import utc_now_iso
 
 POINTS_PER_COMPLETION = 1
@@ -26,18 +27,6 @@ class GroupNotFound(PointsError):
 
 class NotGroupMember(PointsError):
     pass
-
-
-# --- week rule: pure functions, no database ---
-
-def monday_of(day: date) -> date:
-    """The Monday of the week a calendar day falls in. Weeks run Monday to Sunday."""
-    return day - timedelta(days=day.weekday())
-
-
-def week_start_for(moment: datetime) -> date:
-    """The week a moment belongs to, with weeks starting Monday 00:00 UTC."""
-    return monday_of(moment.astimezone(timezone.utc).date())
 
 
 def record_completion(
