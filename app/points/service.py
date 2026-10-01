@@ -12,6 +12,8 @@ from app.points import repository
 from app.shared.timeutils import utc_now_iso
 
 POINTS_PER_COMPLETION = 1
+# Extra points per goal that hit its weekly target this week and the week before.
+STREAK_BONUS = 1
 
 
 class PointsError(Exception):
@@ -67,16 +69,23 @@ def revoke_completion(conn, checkin_id: int) -> None:
 
 
 def get_leaderboard(conn, user_id: int, group_id: int, day: date) -> dict:
-    """The ranking for the week containing `day`, for members of the group only."""
+    """The ranking for the week containing `day`, for members of the group only.
+
+    points includes streak_bonus: +STREAK_BONUS for each goal that hit its weekly
+    target in this week and the previous one. Like the base points, streaks are
+    recomputed from the ledger on every read, so a late rejection can end one.
+    """
     if not auth_service.group_exists(conn, group_id):
         raise GroupNotFound("group not found")
     if not auth_service.is_member(conn, group_id, user_id):
         raise NotGroupMember("not a member of this group")
     week = monday_of(day)
+    previous_week = week - timedelta(weeks=1)
     members = auth_service.list_members(conn, group_id)
     usernames = {member["id"]: member["username"] for member in members}
     rows = repository.weekly_ranking(
-        conn, group_id, week.isoformat(), list(usernames), POINTS_PER_COMPLETION
+        conn, group_id, week.isoformat(), previous_week.isoformat(), list(usernames),
+        POINTS_PER_COMPLETION, STREAK_BONUS,
     )
     return {
         "week_start": week.isoformat(),
@@ -85,6 +94,7 @@ def get_leaderboard(conn, user_id: int, group_id: int, day: date) -> dict:
                 "user_id": row["user_id"],
                 "username": usernames[row["user_id"]],
                 "points": row["points"],
+                "streak_bonus": row["streak_bonus"],
                 "rank": row["rank"],
             }
             for row in rows

@@ -178,3 +178,116 @@ def test_non_member_cannot_see_the_leaderboard(conn, group_id):
 def test_leaderboard_of_missing_group_is_not_found(conn, users):
     with pytest.raises(service.GroupNotFound):
         service.get_leaderboard(conn, users["alice"], 999, THIS_WEEK)
+
+
+# --- streak bonus ---
+
+LAST_WEEK_DAY = "2026-09-22T12:00:00+00:00"   # in the week of 2026-09-21
+THIS_WEEK_DAY = "2026-09-30T12:00:00+00:00"   # in the week of 2026-09-28
+
+
+def hit(complete, user_id, goal_id, at, times_per_week=2):
+    """Complete a goal's full weekly target within the week of `at`."""
+    return [complete(user_id, goal_id, at=at, times_per_week=times_per_week)
+            for _ in range(times_per_week)]
+
+
+def entry(conn, viewer, group_id, username, day=THIS_WEEK):
+    result = service.get_leaderboard(conn, viewer, group_id, day)
+    return next(e for e in result["entries"] if e["username"] == username)
+
+
+def test_target_hit_two_weeks_in_a_row_earns_the_bonus(conn, users, group_id, complete):
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    alice = entry(conn, users["alice"], group_id, "alice")
+    assert alice["streak_bonus"] == 1
+    assert alice["points"] == 3  # 2 completions + 1 bonus
+
+
+def test_first_week_of_a_streak_earns_no_bonus(conn, users, group_id, complete):
+    hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    assert entry(conn, users["alice"], group_id, "alice")["streak_bonus"] == 0
+
+
+def test_streak_needs_this_week_hit_too(conn, users, group_id, complete):
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    complete(users["alice"], 1, at=THIS_WEEK_DAY, times_per_week=2)  # 1 of 2: not hit
+    alice = entry(conn, users["alice"], group_id, "alice")
+    assert (alice["points"], alice["streak_bonus"]) == (1, 0)
+
+
+def test_partial_last_week_breaks_the_streak(conn, users, group_id, complete):
+    complete(users["alice"], 1, at=LAST_WEEK_DAY, times_per_week=2)  # 1 of 2
+    hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    assert entry(conn, users["alice"], group_id, "alice")["streak_bonus"] == 0
+
+
+def test_bonus_stays_flat_on_long_streaks(conn, users, group_id, complete):
+    hit(complete, users["alice"], 1, "2026-09-15T12:00:00+00:00")
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    assert entry(conn, users["alice"], group_id, "alice")["streak_bonus"] == 1
+
+
+def test_each_streaking_goal_earns_its_own_bonus(conn, users, group_id, complete):
+    for goal_id in (1, 2):
+        hit(complete, users["alice"], goal_id, LAST_WEEK_DAY)
+        hit(complete, users["alice"], goal_id, THIS_WEEK_DAY)
+    alice = entry(conn, users["alice"], group_id, "alice")
+    assert (alice["points"], alice["streak_bonus"]) == (6, 2)
+
+
+def test_streak_is_per_goal_not_per_member(conn, users, group_id, complete):
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    hit(complete, users["alice"], 2, THIS_WEEK_DAY)  # a different goal this week
+    assert entry(conn, users["alice"], group_id, "alice")["streak_bonus"] == 0
+
+
+def test_late_rejection_in_last_week_removes_this_weeks_bonus(conn, users, group_id, complete):
+    last_week = hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    service.revoke_completion(conn, last_week[0])  # last week drops to 1 of 2
+    alice = entry(conn, users["alice"], group_id, "alice")
+    assert (alice["points"], alice["streak_bonus"]) == (2, 0)
+
+
+def test_rejection_this_week_removes_points_and_bonus(conn, users, group_id, complete):
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    this_week = hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    service.revoke_completion(conn, this_week[1])
+    alice = entry(conn, users["alice"], group_id, "alice")
+    assert (alice["points"], alice["streak_bonus"]) == (1, 0)
+
+
+def test_extra_completion_replaces_a_rejected_one_and_keeps_the_streak(
+    conn, users, group_id, complete
+):
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    this_week = hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    complete(users["alice"], 1, at=THIS_WEEK_DAY, times_per_week=2)  # a 3rd, beyond the target
+    service.revoke_completion(conn, this_week[0])
+    alice = entry(conn, users["alice"], group_id, "alice")
+    assert (alice["points"], alice["streak_bonus"]) == (3, 1)
+
+
+def test_the_latest_checkins_target_decides_whether_the_week_was_hit(
+    conn, users, group_id, complete
+):
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    # This week: one completion under target 3, then the goal is edited down to 1.
+    complete(users["alice"], 1, at="2026-09-29T09:00:00+00:00", times_per_week=3)
+    complete(users["alice"], 1, at="2026-09-30T09:00:00+00:00", times_per_week=1)
+    assert entry(conn, users["alice"], group_id, "alice")["streak_bonus"] == 1
+
+
+def test_streak_bonus_can_break_a_tie(conn, users, group_id, complete):
+    hit(complete, users["alice"], 1, LAST_WEEK_DAY)
+    hit(complete, users["alice"], 1, THIS_WEEK_DAY)
+    for _ in range(2):
+        complete(users["bob"], 2, at=THIS_WEEK_DAY, times_per_week=2)
+    assert board(conn, users["alice"], group_id) == [
+        ("alice", 3, 1),
+        ("bob", 2, 2),
+        ("carol", 0, 3),
+    ]
