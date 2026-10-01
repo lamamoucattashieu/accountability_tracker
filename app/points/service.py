@@ -5,6 +5,7 @@ published event. Only IDs (and the shared connection, so both domains' writes
 commit in one transaction) cross it.
 """
 
+import logging
 import sqlite3
 from datetime import date, datetime, timedelta
 
@@ -12,7 +13,10 @@ from app.auth import service as auth_service
 from app.config import FORFEIT_MAX_LENGTH
 from app.points import repository, rules
 from app.points.rules import monday_of, week_start_for
+from app.shared import uploads
 from app.shared.timeutils import utc_now_iso
+
+logger = logging.getLogger(__name__)
 
 POINTS_PER_COMPLETION = 1
 # Extra points per goal that hit its weekly target this week and the week before.
@@ -36,6 +40,22 @@ class InvalidForfeit(PointsError):
 
 
 class SettlementBusy(PointsError):
+    pass
+
+
+class AssignmentNotFound(PointsError):
+    pass
+
+
+class NotAssignee(PointsError):
+    pass
+
+
+class ProofAlreadySubmitted(PointsError):
+    pass
+
+
+class ProofNotFound(PointsError):
     pass
 
 
@@ -261,3 +281,50 @@ def _assignment_response(row, usernames: dict, now: datetime) -> dict:
         "proof_at": row["proof_at"],
         "status": rules.proof_status(due, proof_at, now),
     }
+
+
+# --- proof ---
+
+def _get_assignment_for_member(conn, user_id: int, assignment_id: int):
+    assignment = repository.get_assignment(conn, assignment_id)
+    if assignment is None:
+        raise AssignmentNotFound("forfeit assignment not found")
+    if not auth_service.is_member(conn, assignment["group_id"], user_id):
+        raise NotGroupMember("not a member of this group")
+    return assignment
+
+
+def submit_proof(conn, user_id: int, assignment_id: int, photo_file, now: datetime) -> dict:
+    """The assigned member uploads photo proof, once. Late proof is accepted and shown as late."""
+    assignment = _get_assignment_for_member(conn, user_id, assignment_id)
+    ensure_settled(conn, assignment["group_id"], now)
+    if assignment["user_id"] != user_id:
+        raise NotAssignee("only the member assigned this forfeit can upload proof")
+    if assignment["proof_path"] is not None:
+        raise ProofAlreadySubmitted("proof was already uploaded")
+    proof_path = uploads.save_image(photo_file)
+    try:
+        stored = repository.set_proof(
+            conn, assignment_id, proof_path, now.isoformat(timespec="seconds")
+        )
+    except Exception:
+        uploads.delete_image(proof_path)  # same rule as create_checkin: no orphaned files
+        raise
+    if not stored:  # a simultaneous upload won the conditional UPDATE
+        uploads.delete_image(proof_path)
+        raise ProofAlreadySubmitted("proof was already uploaded")
+    usernames = {m["id"]: m["username"] for m in auth_service.list_members(conn, assignment["group_id"])}
+    return _assignment_response(repository.get_assignment(conn, assignment_id), usernames, now)
+
+
+def get_proof_photo_path(conn, user_id: int, assignment_id: int, now: datetime):
+    """Access-control gate in front of the proof photo: group members only."""
+    assignment = _get_assignment_for_member(conn, user_id, assignment_id)
+    ensure_settled(conn, assignment["group_id"], now)
+    if assignment["proof_path"] is None:
+        raise ProofNotFound("no proof uploaded yet")
+    path = uploads.resolve_path(assignment["proof_path"])
+    if not path.is_file():
+        logger.warning("assignment %s points to missing proof %s", assignment_id, path)
+        raise ProofNotFound("proof photo not found")
+    return path

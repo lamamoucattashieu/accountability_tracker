@@ -244,3 +244,30 @@ def list_assignments(conn, group_id):
         """,
         (group_id,),
     ).fetchall()
+
+
+
+# --- proof ---
+
+def get_assignment(conn, assignment_id):
+    return conn.execute(
+        """
+        SELECT forfeit_assignments.*, settlements.group_id, settlements.settled_at
+        FROM forfeit_assignments
+        JOIN settlements ON settlements.id = forfeit_assignments.settlement_id
+        WHERE forfeit_assignments.id = ?
+        """,
+        (assignment_id,),
+    ).fetchone()
+
+
+def set_proof(conn, assignment_id, proof_path, proof_at):
+    """Returns True only for the upload that actually stored the proof (once per assignment)."""
+    cur = conn.execute(
+        """
+        UPDATE forfeit_assignments SET proof_path = ?, proof_at = ?
+        WHERE id = ? AND proof_path IS NULL
+        """,
+        (proof_path, proof_at, assignment_id),
+    )
+    return cur.rowcount == 1
