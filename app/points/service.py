@@ -7,10 +7,23 @@ commit in one transaction) cross it.
 
 from datetime import date, datetime, timedelta, timezone
 
+from app.auth import service as auth_service
 from app.points import repository
 from app.shared.timeutils import utc_now_iso
 
 POINTS_PER_COMPLETION = 1
+
+
+class PointsError(Exception):
+    """Base class for every rule violation in the points & forfeits domain."""
+
+
+class GroupNotFound(PointsError):
+    pass
+
+
+class NotGroupMember(PointsError):
+    pass
 
 
 # --- week rule: pure functions, no database ---
@@ -51,3 +64,29 @@ def revoke_completion(conn, checkin_id: int) -> None:
     rescored the next time the leaderboard is read.
     """
     repository.revoke_event(conn, checkin_id, utc_now_iso())
+
+
+def get_leaderboard(conn, user_id: int, group_id: int, day: date) -> dict:
+    """The ranking for the week containing `day`, for members of the group only."""
+    if not auth_service.group_exists(conn, group_id):
+        raise GroupNotFound("group not found")
+    if not auth_service.is_member(conn, group_id, user_id):
+        raise NotGroupMember("not a member of this group")
+    week = monday_of(day)
+    members = auth_service.list_members(conn, group_id)
+    usernames = {member["id"]: member["username"] for member in members}
+    rows = repository.weekly_ranking(
+        conn, group_id, week.isoformat(), list(usernames), POINTS_PER_COMPLETION
+    )
+    return {
+        "week_start": week.isoformat(),
+        "entries": [
+            {
+                "user_id": row["user_id"],
+                "username": usernames[row["user_id"]],
+                "points": row["points"],
+                "rank": row["rank"],
+            }
+            for row in rows
+        ],
+    }
