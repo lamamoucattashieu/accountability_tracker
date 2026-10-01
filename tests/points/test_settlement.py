@@ -310,3 +310,33 @@ def test_non_member_cannot_see_settlements(call, conn, group):
 def test_settlements_of_missing_group_are_not_found(call, people):
     with pytest.raises(service.GroupNotFound):
         call(service.list_settlements, people["ana"], 999, SETTLES)
+
+
+def test_failure_mid_settlement_leaves_no_half_settled_week(call, conn, people, group, forfeit, monkeypatch):
+    """The settlement row and its assignments commit together or not at all."""
+    score(conn, people["ana"], group, 2)
+
+    def failing_assignment(*args):
+        raise RuntimeError("crash after the settlement row was inserted")
+
+    monkeypatch.setattr(repository, "insert_assignment", failing_assignment)
+    with pytest.raises(RuntimeError):
+        call(service.ensure_settled, group, SETTLES)
+    assert WEEK.isoformat() not in repository.settled_week_starts(conn, group)
+    monkeypatch.undo()
+    call(service.ensure_settled, group, SETTLES)  # the next request settles it properly
+    assert losers(week_of(call, people["ana"], group, SETTLES)) == ["ben", "cy"]
+
+
+def test_integrity_error_other_than_a_duplicate_week_is_not_swallowed(
+    call, conn, people, group, forfeit, monkeypatch
+):
+    score(conn, people["ana"], group, 2)
+
+    def broken_assignment(*args):
+        raise sqlite3.IntegrityError("CHECK constraint failed")
+
+    monkeypatch.setattr(repository, "insert_assignment", broken_assignment)
+    with pytest.raises(sqlite3.IntegrityError):
+        call(service.ensure_settled, group, SETTLES)
+    assert WEEK.isoformat() not in repository.settled_week_starts(conn, group)
