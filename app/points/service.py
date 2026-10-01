@@ -8,7 +8,8 @@ commit in one transaction) cross it.
 from datetime import date, datetime, timedelta
 
 from app.auth import service as auth_service
-from app.points import repository
+from app.config import FORFEIT_MAX_LENGTH
+from app.points import repository, rules
 from app.points.rules import monday_of, week_start_for
 from app.shared.timeutils import utc_now_iso
 
@@ -27,6 +28,17 @@ class GroupNotFound(PointsError):
 
 class NotGroupMember(PointsError):
     pass
+
+
+class InvalidForfeit(PointsError):
+    pass
+
+
+def _require_member(conn, user_id: int, group_id: int):
+    if not auth_service.group_exists(conn, group_id):
+        raise GroupNotFound("group not found")
+    if not auth_service.is_member(conn, group_id, user_id):
+        raise NotGroupMember("not a member of this group")
 
 
 def record_completion(
@@ -57,6 +69,18 @@ def revoke_completion(conn, checkin_id: int) -> None:
     repository.revoke_event(conn, checkin_id, utc_now_iso())
 
 
+def _weekly_ranking(conn, group_id: int, week: date, member_ids: list[int]):
+    """Points (with streak bonus) and rank of the given members for one week.
+
+    The one scoring query, shared by the leaderboard and by settlement.
+    """
+    previous_week = week - timedelta(weeks=1)
+    return repository.weekly_ranking(
+        conn, group_id, week.isoformat(), previous_week.isoformat(), member_ids,
+        POINTS_PER_COMPLETION, STREAK_BONUS,
+    )
+
+
 def get_leaderboard(conn, user_id: int, group_id: int, day: date) -> dict:
     """The ranking for the week containing `day`, for members of the group only.
 
@@ -64,18 +88,11 @@ def get_leaderboard(conn, user_id: int, group_id: int, day: date) -> dict:
     target in this week and the previous one. Like the base points, streaks are
     recomputed from the ledger on every read, so a late rejection can end one.
     """
-    if not auth_service.group_exists(conn, group_id):
-        raise GroupNotFound("group not found")
-    if not auth_service.is_member(conn, group_id, user_id):
-        raise NotGroupMember("not a member of this group")
+    _require_member(conn, user_id, group_id)
     week = monday_of(day)
-    previous_week = week - timedelta(weeks=1)
     members = auth_service.list_members(conn, group_id)
     usernames = {member["id"]: member["username"] for member in members}
-    rows = repository.weekly_ranking(
-        conn, group_id, week.isoformat(), previous_week.isoformat(), list(usernames),
-        POINTS_PER_COMPLETION, STREAK_BONUS,
-    )
+    rows = _weekly_ranking(conn, group_id, week, list(usernames))
     return {
         "week_start": week.isoformat(),
         "entries": [
@@ -88,4 +105,44 @@ def get_leaderboard(conn, user_id: int, group_id: int, day: date) -> dict:
             }
             for row in rows
         ],
+    }
+
+
+# --- forfeits ---
+
+def _forfeit_response(forfeit):
+    if forfeit is None:
+        return None
+    return {key: forfeit[key] for key in ("id", "text", "set_by", "created_at")}
+
+
+def set_forfeit(conn, user_id: int, group_id: int, text: str, now: datetime) -> dict:
+    """Add a new forfeit for the group. It applies from next week: this week's is locked."""
+    _require_member(conn, user_id, group_id)
+    text = (text or "").strip()
+    if not 1 <= len(text) <= FORFEIT_MAX_LENGTH:
+        raise InvalidForfeit(f"forfeit must be 1-{FORFEIT_MAX_LENGTH} characters")
+    forfeit_id = repository.insert_forfeit(
+        conn, group_id, text, user_id, now.isoformat(timespec="seconds")
+    )
+    response = _forfeit_response(repository.get_forfeit(conn, forfeit_id))
+    response["applies_from"] = (monday_of(now.date()) + rules.WEEK).isoformat()
+    return response
+
+
+def get_forfeits(conn, user_id: int, group_id: int, now: datetime) -> dict:
+    """This week's locked forfeit and the one that will apply from next week."""
+    _require_member(conn, user_id, group_id)
+    forfeits = [dict(f) for f in repository.list_forfeits(conn, group_id)]
+    this_week = week_start_for(now)
+    next_week = this_week + rules.WEEK
+    return {
+        "this_week": {
+            "week_start": this_week.isoformat(),
+            "forfeit": _forfeit_response(rules.forfeit_for_week(forfeits, this_week)),
+        },
+        "upcoming": {
+            "week_start": next_week.isoformat(),
+            "forfeit": _forfeit_response(rules.forfeit_for_week(forfeits, next_week)),
+        },
     }

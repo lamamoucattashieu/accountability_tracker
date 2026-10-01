@@ -1,5 +1,7 @@
 import json
 
+from app.config import FORFEIT_MAX_LENGTH
+
 # Points stores other domains' ids (checkin, group, user, goal) without foreign
 # keys: they arrive only through record_completion, and keeping the tables free
 # of cross-domain references means a future split doesn't have to drop any (ADR-2).
@@ -18,11 +20,43 @@ CREATE TABLE IF NOT EXISTS point_events (
 
 CREATE INDEX IF NOT EXISTS idx_point_events_group_week
     ON point_events (group_id, week_start);
+
+-- Append-only: a forfeit is never updated or deleted, so past weeks keep theirs.
+CREATE TABLE IF NOT EXISTS forfeits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND {FORFEIT_MAX_LENGTH}),
+    set_by INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- One row per group and week: UNIQUE makes settling a week twice impossible.
+CREATE TABLE IF NOT EXISTS settlements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    week_start TEXT NOT NULL CHECK (strftime('%w', week_start) = '1'),
+    forfeit_id INTEGER REFERENCES forfeits(id),
+    settled_at TEXT NOT NULL,
+    UNIQUE (group_id, week_start)
+);
+
+-- One row per loser of a settled week; score is frozen at settlement.
+CREATE TABLE IF NOT EXISTS forfeit_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    settlement_id INTEGER NOT NULL REFERENCES settlements(id),
+    user_id INTEGER NOT NULL,
+    score INTEGER NOT NULL,
+    proof_path TEXT,
+    proof_at TEXT,
+    UNIQUE (settlement_id, user_id),
+    CHECK ((proof_path IS NULL) = (proof_at IS NULL))
+);
 """
 
 
 def create_tables(conn):
-    conn.executescript(CREATE_TABLES_SQL)
+    # The forfeit length limit comes from config.py, so it isn't duplicated as a magic number.
+    conn.executescript(CREATE_TABLES_SQL.replace("{FORFEIT_MAX_LENGTH}", str(FORFEIT_MAX_LENGTH)))
 
 
 def insert_event(
@@ -130,4 +164,24 @@ def weekly_ranking(conn, group_id, week_start, previous_week_start, member_ids,
             "points_per_completion": points_per_completion,
             "streak_bonus": streak_bonus,
         },
+    ).fetchall()
+
+
+# --- forfeits ---
+
+def insert_forfeit(conn, group_id, text, set_by, created_at):
+    cur = conn.execute(
+        "INSERT INTO forfeits (group_id, text, set_by, created_at) VALUES (?, ?, ?, ?)",
+        (group_id, text, set_by, created_at),
+    )
+    return cur.lastrowid
+
+
+def get_forfeit(conn, forfeit_id):
+    return conn.execute("SELECT * FROM forfeits WHERE id = ?", (forfeit_id,)).fetchone()
+
+
+def list_forfeits(conn, group_id):
+    return conn.execute(
+        "SELECT * FROM forfeits WHERE group_id = ? ORDER BY created_at, id", (group_id,)
     ).fetchall()
