@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-5 are done and merged (PRs #1-#8), so both domains are complete.
-Next: **Phase 6** (frontend), then Phase 7 (hardening & docs).
+**Current status:** Phases 0-5 are done and merged (PRs #1-#9), so both domains are complete.
+**Phase 6** (frontend) is implemented on `feat/phase-6-frontend`. Next: Phase 7 (hardening & docs).
 
 ---
 
@@ -241,6 +241,30 @@ Recorded so later phases stay consistent with them. Each one was an open questio
 - Seam changes: `get_leaderboard` takes `now` and returns `provisional`; `auth_service.list_members`
   also returns `joined_at`; new `auth_service.group_created_at`.
 
+**Phase 6: Frontend**
+- Plain HTML/CSS/JS in `app/static/` (index.html, styles.css, api.js, app.js), served by the same
+  FastAPI process at `/` and `/static`. No build step, npm, CDN or external fonts; relative URLs only.
+- Auth is the existing httponly session cookie, not a token: JS can't read it, so XSS can't steal
+  it. `api.js` sends `credentials: "same-origin"` and treats any 401 (except a wrong password) as
+  logged out. Every state-changing endpoint is POST/PATCH, so `SameSite=Lax` blocks cross-site
+  CSRF; the GETs that run `ensure_settled` are idempotent and take no attacker input.
+- `api.js` is a Facade over fetch (the only file with URLs and status codes), grouped by domain;
+  `app.js` holds state and rendering, with a view map and a tab map instead of if/else chains.
+  User content is only ever set through `textContent` (no `innerHTML`).
+- Usernames come from a new read-only `GET /groups/{id}/members` in auth (reusing `list_members`
+  behind the 404/403 check). The UI maps the feed's `user_id`s to these names, the composition a
+  gateway would do after a service split; getting names from the leaderboard was rejected because
+  it would make the Goals & Check-ins UI depend on Points.
+- Display-only rules in the UI: no vote button on your own check-ins, no proof upload on others'
+  assignments, and a vote cast this session is remembered from the vote response. The server
+  still enforces all of them.
+- Known limitation (G2): the feed doesn't expose vote state (whether you voted, the current count,
+  votes needed), so a vote's count is shown only after you cast it; a repeat vote shows the
+  server's 409 message.
+- Known limitation (G3): the voting window isn't exposed, and re-implementing `created_at + 48h` in
+  JS would duplicate a business rule, so the vote button stays and a late vote shows the server's
+  409 "voting has closed".
+
 ---
 
 ## Phases
@@ -270,8 +294,8 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    uploads proof.
    *Done when:* settlement is tested for ties, empty weeks, and concurrent first requests (the
    UNIQUE constraint holds); proof upload reuses `app/shared/uploads.py`.
-6. **Frontend:** simple HTML/JS pages for everything above. If time is short, cut to the minimum
-   usable pages rather than eat into Phase 7.
+6. **Frontend** (implemented on `feat/phase-6-frontend`): simple HTML/JS pages for everything
+   above. If time is short, cut to the minimum usable pages rather than eat into Phase 7.
 7. **Hardening & docs:** coverage to ≥70% on service logic, README (setup + coverage command),
    and a security pass (password hashing, session cookie flags, upload size/type/path-traversal
    checks, group membership checked on every group-scoped endpoint). Also generate the
