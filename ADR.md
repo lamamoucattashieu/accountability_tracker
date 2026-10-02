@@ -12,7 +12,7 @@ Consequences: I work in the language I know best and keep the dependency list sh
 Date: 2026-09-29
 Status: Decided
 Context: The app runs as one process now but should be splittable into services later. Goals & Check-ins and Points & Forfeits both need user/group data and photos, which would easily tangle them together through shared tables.
-Decision: Each domain owns its tables and exposes a service layer; other code may call a domain's service functions but never query its tables. Check-ins asks auth only through auth.service.is_member/group_exists, will notify Points only through points.service.record_completion/revoke_completion, and photo handling lives in shared/uploads.py so neither domain imports the other for it.
+Decision: Each domain owns its tables and exposes a service layer; other code may call a domain's service functions but never query its tables. Both domains ask auth only through auth.service functions (e.g. is_member, list_members), check-ins notifies Points only through points.service.record_completion/revoke_completion, and photo handling lives in shared/uploads.py so neither domain imports the other for it.
 Alternatives considered: Letting app/checkins/repository.py query group_members directly (simpler, one JOIN). Rejected because it couples Check-ins to auth's table layout, so a service split would mean rewriting SQL instead of replacing one function with an HTTP call. A separate SQLite file per domain was also rejected: the spec requires one SQLite file at one path, and it would lose cross-domain transactions immediately rather than at split time.
 Consequences: A future split mostly changes the seam functions, plus dropping the cross-domain foreign keys (goals → users/groups) and handling what one SQLite transaction currently gives for free: a check-in and its point event being written together. Day to day, it costs cross-domain JOINs: the goals list returns user_id rather than username, and some checks need extra queries.
 
@@ -20,7 +20,7 @@ Consequences: A future split mostly changes the seam functions, plus dropping th
 Date: 2026-10-01
 Status: Decided
 Context: Check-ins and their points must keep pointing at the goal and check-in they came from even after a goal is archived or a check-in is rejected, and there is no migration tool, so columns later phases need must exist from the start. Points also needs per-check-in data without reading the check-ins tables (ADR-2).
-Decision: Goals are soft-archived (archived_at), and a check-in stores only goal_id, a photo path relative to DATA_DIR and a status column for voting, with its group and owner derived by a same-domain JOIN. Points keeps a ledger, point_events, with one row per check-in (UNIQUE checkin_id, revoked_at on rejection) that holds other domains' ids without foreign keys, and weekly scores and streak bonuses are computed from it in SQL rather than stored.
+Decision: Goals are soft-archived (archived_at), and a check-in stores only goal_id, a photo path relative to DATA_DIR and a status column for voting, with its group and owner derived by a same-domain JOIN. Points keeps a ledger, point_events, with one row per check-in (UNIQUE checkin_id, revoked_at on rejection) that holds other domains' ids without foreign keys, and weekly scores and streak bonuses are computed from it in SQL rather than stored; only a settled week is stored (settlements, forfeit_assignments), because it must not change once final.
 Alternatives considered: Hard-deleting goals with ON DELETE CASCADE, rejected because it would erase check-ins and their points. Storing weekly totals per member, rejected because incrementing is not idempotent and a rejection could not free a capped slot, rescore a past week or end a streak without recounting. Foreign keys from point_events to check-ins, rejected because they tie Points to the check-ins schema and would have to be dropped in a split.
 Consequences: History survives archiving and rejection, scoring a check-in twice is impossible at the database level, and rankings and streaks always match the events. In exchange, every leaderboard read recomputes two weeks with window functions, and the database cannot stop point_events from holding an id that does not exist in another domain.
 
@@ -38,6 +38,8 @@ erDiagram
     checkins ||--o{ checkin_votes : receives
     users ||--o{ checkin_votes : casts
     checkins ||..o| point_events : "checkin_id (no FK)"
+    forfeits ||--o{ settlements : "locked for"
+    settlements ||--o{ forfeit_assignments : assigns
 
     users {
         int id PK
@@ -97,4 +99,34 @@ erDiagram
         text completed_at
         text revoked_at "NULL = counts"
     }
+    forfeits {
+        int id PK
+        int group_id "no FK"
+        text text "CHECK 1-200 chars"
+        int set_by "no FK"
+        text created_at
+    }
+    settlements {
+        int id PK
+        int group_id "no FK, UNIQUE with week_start"
+        text week_start "CHECK is a Monday"
+        int forfeit_id FK "NULL = no forfeit set"
+        text settled_at
+    }
+    forfeit_assignments {
+        int id PK
+        int settlement_id FK "UNIQUE with user_id"
+        int user_id "no FK"
+        int score "frozen at settlement"
+        text proof_path "relative to DATA_DIR"
+        text proof_at
+    }
 ```
+
+## 5. Deliberately not built: voting on forfeit proof
+Date: 2026-10-02
+Status: Decided
+Context: A forfeit loser uploads photo proof, and check-ins already let the group vote to reject a suspicious photo, so the same could be built for proof. Points must stay independent of the check-ins domain, and the deadline left little time.
+Decision: Proof is accepted as uploaded: only the assigned member can upload it, once, and every group member can see it, but nobody can vote it down.
+Alternatives considered: Reusing the check-in rejection vote for proof, rejected because Points would either depend on check-ins' voting code or duplicate it, and a second 48h window would delay when a forfeit counts as done. A point penalty for missing proof, rejected so that scoring stays independent of forfeits.
+Consequences: A loser could upload an unrelated photo; the group sees it and deals with it socially, as with goal farming in Phase 2a. Proof voting can be added later as a new table and endpoint inside Points without changing existing tables.
