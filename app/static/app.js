@@ -3,7 +3,7 @@
 // streaks, settlement, vote thresholds) stay on the server: views only show
 // what the API returns.
 
-import { ApiError, auth, checkins, groups, onUnauthorized } from "./api.js";
+import { ApiError, auth, checkins, groups, onUnauthorized, points } from "./api.js";
 
 const state = {
   me: null, // {id, username} of the logged-in user
@@ -74,6 +74,13 @@ function nameOf(userId) {
     return "You";
   }
   return state.names.get(userId) || "A member";
+}
+
+// "2026-09-28" -> "28 Sep". Weeks are UTC dates, so format them in UTC.
+function formatDay(isoDate) {
+  return new Date(`${isoDate}T00:00:00Z`).toLocaleDateString(undefined, {
+    day: "numeric", month: "short", timeZone: "UTC",
+  });
 }
 
 function badge(text, kind) {
@@ -234,6 +241,9 @@ const groupTabs = {
   // Goals & Check-ins domain
   checkins: { label: "Check-ins", render: renderCheckins },
   goals: { label: "Goals", render: renderGoals },
+  // Points & Forfeits domain
+  leaderboard: { label: "Leaderboard", render: renderLeaderboard },
+  forfeits: { label: "Forfeits", render: renderForfeits },
 };
 
 function refreshGroup() {
@@ -420,6 +430,129 @@ function goalItem(goal) {
     ),
     goal.description ? el("p", { text: goal.description }) : null,
     error,
+  );
+}
+
+// --- Points & Forfeits tabs -------------------------------------------------
+// Scores, streaks, losers and proof status all come from the server; these
+// views only display them.
+
+function renderLeaderboard(panel) {
+  const body = el("div");
+  panel.append(el("section", { class: "card" }, body));
+  loadInto(body, () => points.leaderboard(state.group.id), (container, board) => {
+    container.append(
+      el("div", { class: "row" },
+        el("h3", { text: `Week of ${formatDay(board.week_start)}` }),
+        board.provisional ? badge("Provisional", "warning") : badge("Final", "success"),
+      ),
+      board.provisional
+        ? el("p", { class: "muted", text: "Votes can still change this week's ranking." })
+        : null,
+      el("ol", { class: "list leaderboard" }, ...board.entries.map(leaderboardRow)),
+    );
+  }, "");
+}
+
+function leaderboardRow(entry) {
+  const isMe = entry.user_id === state.me.id;
+  return el("li", { class: isMe ? "entry me" : "entry" },
+    el("span", { class: "rank", text: `#${entry.rank}` }),
+    el("span", { class: "entry-name", text: isMe ? `${entry.username} (you)` : entry.username }),
+    entry.streak_bonus > 0 ? badge(`Streak +${entry.streak_bonus}`, "warning") : null,
+    el("strong", { class: "entry-points", text: `${entry.points} pts` }),
+  );
+}
+
+const OUTCOME_TEXT = {
+  no_forfeit: "No forfeit was set for this week, so nobody had to do one.",
+  no_loser: "Nobody lost: everyone was tied.",
+};
+
+const PROOF_STATUS = {
+  pending: { text: "Proof due", kind: "info" },
+  overdue: { text: "Overdue", kind: "danger" },
+  submitted: { text: "Done", kind: "success" },
+  late: { text: "Done late", kind: "warning" },
+};
+
+function renderForfeits(panel) {
+  const current = el("div");
+  const results = el("div");
+  const setForfeit = actionForm({
+    fields: [input("New forfeit", { name: "text", required: true, placeholder: "e.g. 50 burpees on video" })],
+    submitLabel: "Set forfeit",
+    onSubmit: async (data) => {
+      await points.setForfeit(state.group.id, data.get("text"));
+      refreshGroup();
+    },
+  });
+  panel.append(
+    el("section", { class: "card" }, el("h3", { text: "The forfeit" }), current),
+    el("section", { class: "card" },
+      el("h3", { text: "Change the forfeit" }),
+      el("p", { class: "muted", text: "This week's forfeit is locked. A new one applies from next week." }),
+      setForfeit,
+    ),
+    el("section", { class: "card" }, el("h3", { text: "Past weeks" }), results),
+  );
+
+  loadInto(current, () => points.forfeits(state.group.id), (container, forfeits) => {
+    const thisWeek = forfeits.this_week.forfeit;
+    const upcoming = forfeits.upcoming.forfeit;
+    container.append(el("p", {
+      class: "forfeit-text",
+      text: thisWeek ? thisWeek.text : "No forfeit is locked in for this week.",
+    }));
+    if (upcoming && (!thisWeek || upcoming.id !== thisWeek.id)) {
+      container.append(el("p", {
+        class: "muted",
+        text: `From ${formatDay(forfeits.upcoming.week_start)}: ${upcoming.text}`,
+      }));
+    }
+  }, "");
+
+  loadInto(results, () => points.settlements(state.group.id), (container, settlements) => {
+    container.append(el("ul", { class: "list" }, ...settlements.map(settlementItem)));
+  }, "No finished weeks yet.");
+}
+
+function settlementItem(settlement) {
+  const losers = settlement.assignments.length > 0
+    ? el("ul", { class: "list" }, ...settlement.assignments.map(assignmentItem))
+    : el("p", { class: "muted", text: OUTCOME_TEXT[settlement.outcome] });
+  return el("li", { class: "settlement" },
+    el("strong", { text: `Week of ${formatDay(settlement.week_start)}` }),
+    settlement.forfeit ? el("p", { class: "forfeit-text", text: settlement.forfeit }) : null,
+    losers,
+  );
+}
+
+function assignmentItem(assignment) {
+  const status = PROOF_STATUS[assignment.status];
+  const isMine = assignment.user_id === state.me.id;
+  // Display-only: the upload form shows on your own assignment; the server
+  // still rejects anyone else (403) and a second upload (409).
+  const upload = isMine && !assignment.proof_url
+    ? actionForm({
+      fields: [input("Photo proof", { name: "photo", type: "file", accept: "image/*", capture: "environment", required: true })],
+      submitLabel: "Upload proof",
+      onSubmit: async (data) => {
+        await points.uploadProof(assignment.id, data.get("photo"));
+        refreshGroup();
+      },
+    })
+    : null;
+  return el("li", { class: "assignment" },
+    el("div", { class: "row" },
+      el("span", {}, el("strong", { text: nameOf(assignment.user_id) }), ` · ${assignment.score} pts`),
+      badge(status.text, status.kind),
+    ),
+    el("p", { class: "muted", text: `Proof due by ${formatWhen(assignment.due_at)}` }),
+    assignment.proof_url
+      ? el("img", { src: assignment.proof_url, alt: `${nameOf(assignment.user_id)}'s forfeit proof`, loading: "lazy" })
+      : null,
+    upload,
   );
 }
 
