@@ -1,3 +1,5 @@
+import pytest
+
 from app.auth import repository, service
 from app.shared.timeutils import utc_now_iso
 
@@ -21,3 +23,33 @@ def test_is_member_and_group_exists(conn):
     ]
     assert service.group_created_at(conn, group_id) == now
     assert service.group_created_at(conn, 999) is None
+
+
+
+def make_group_with(conn, *names):
+    now = utc_now_iso()
+    ids = [repository.insert_user(conn, name, "not-a-real-hash", now) for name in names]
+    group_id = repository.insert_group(conn, "friends", "MEMB1234", ids[0], now)
+    for user_id in ids[:2]:  # only the first two join; any third user stays outside
+        repository.add_group_member(conn, group_id, user_id, now)
+    return group_id, ids
+
+
+def test_members_get_ids_and_usernames_only(conn):
+    group_id, (ana, ben, _) = make_group_with(conn, "ana", "ben", "outsider")
+    assert service.get_members(conn, ana, group_id) == [
+        {"id": ana, "username": "ana"},
+        {"id": ben, "username": "ben"},
+    ]
+
+
+def test_non_member_cannot_list_members(conn):
+    group_id, (_, _, outsider) = make_group_with(conn, "ana", "ben", "outsider")
+    with pytest.raises(service.NotGroupMemberError):  # the route maps this to 403
+        service.get_members(conn, outsider, group_id)
+
+
+def test_members_of_missing_group_is_not_found(conn):
+    _, (ana, _, _) = make_group_with(conn, "ana", "ben", "outsider")
+    with pytest.raises(service.GroupNotFoundError):  # the route maps this to 404
+        service.get_members(conn, ana, 999)

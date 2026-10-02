@@ -111,3 +111,15 @@ def list_groups(user=Depends(get_current_user)):
     with get_db() as conn:
         groups = service.list_my_groups(conn, user["id"])
     return [dict(group) for group in groups]
+
+
+@groups_router.get("/{group_id}/members")
+def list_group_members(group_id: int, user=Depends(get_current_user)):
+    """Ids and usernames, so the UI can show names next to other domains' user_ids."""
+    with get_db() as conn:
+        try:
+            return service.get_members(conn, user["id"], group_id)
+        except service.GroupNotFoundError:
+            raise HTTPException(status_code=404, detail="group not found")
+        except service.NotGroupMemberError:
+            raise HTTPException(status_code=403, detail="not a member of this group")

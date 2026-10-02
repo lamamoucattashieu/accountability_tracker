@@ -91,6 +91,7 @@ export const groups = {
   list: () => request("GET", "/groups"),
   create: (name) => request("POST", "/groups", { json: { name } }),
   join: (inviteCode) => request("POST", "/groups/join", { json: { invite_code: inviteCode } }),
+  members: (groupId) => request("GET", `/groups/${groupId}/members`),
 };
 
 // --- Goals & Check-ins domain ---

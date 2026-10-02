@@ -24,6 +24,14 @@ class InvalidInviteCodeError(Exception):
     pass
 
 
+class GroupNotFoundError(Exception):
+    pass
+
+
+class NotGroupMemberError(Exception):
+    pass
+
+
 def _create_session(conn, user_id: int) -> str:
     token = new_session_token()
     now = datetime.now(timezone.utc)
@@ -116,3 +124,15 @@ def group_created_at(conn, group_id: int):
     """ISO 8601 UTC creation time of a group, or None if it doesn't exist."""
     group = repository.get_group_by_id(conn, group_id)
     return None if group is None else group["created_at"]
+
+
+def get_members(conn, user_id: int, group_id: int) -> list[dict]:
+    """Display names for a group's members: members only (404, then 403, as elsewhere)."""
+    if not group_exists(conn, group_id):
+        raise GroupNotFoundError(group_id)
+    if not is_member(conn, group_id, user_id):
+        raise NotGroupMemberError(group_id)
+    return [
+        {"id": member["id"], "username": member["username"]}
+        for member in list_members(conn, group_id)
+    ]
