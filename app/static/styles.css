@@ -1,0 +1,254 @@
+/* Design tokens: every colour, size and spacing value is defined once here. */
+:root {
+  --color-bg: #f6f4ff;
+  --color-surface: #ffffff;
+  --color-text: #1d1a2e;
+  --color-muted: #5c5873;
+  --color-border: #ddd8f0;
+  --color-primary: #5b3fd6;
+  --color-primary-text: #ffffff;
+  --color-primary-soft: #ece7ff;
+  --color-accent: #ff7a45;
+  --color-success: #1d7a46;
+  --color-success-soft: #e3f5ea;
+  --color-danger: #b42318;
+  --color-danger-soft: #fdecea;
+  --color-warning: #8a5a00;
+  --color-warning-soft: #fff3d6;
+  --color-focus: #ff7a45;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  --radius: 14px;
+  --radius-small: 8px;
+  --shadow: 0 2px 10px rgba(45, 30, 110, 0.08);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --max-width: 40rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+/* --- layout --- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+}
+
+.brand {
+  margin: 0;
+  font-size: 1.1rem;
+  letter-spacing: 0.01em;
+}
+
+.brand span {
+  color: var(--color-accent);
+  margin-left: var(--space-1);
+}
+
+.user-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+}
+
+.view {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: var(--space-4);
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+h2 {
+  font-size: 1.25rem;
+  margin: 0 0 var(--space-3);
+}
+
+h3 {
+  font-size: 1.05rem;
+  margin: 0 0 var(--space-2);
+}
+
+.muted {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+/* --- forms --- */
+
+form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.field {
+  display: grid;
+  gap: var(--space-1);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  font-weight: 400;
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-small);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  min-height: 2.75rem; /* comfortable tap target on phones */
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-small);
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+button.secondary {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+button.danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.topbar button {
+  min-height: 2.25rem;
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--color-primary-text);
+}
+
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.form-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 0.9rem;
+}
+
+.form-error:empty {
+  display: none;
+}
+
+/* --- states: loading, empty, error --- */
+
+.notice {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-small);
+  background: var(--color-primary-soft);
+  color: var(--color-muted);
+}
+
+.notice-error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+/* --- lists --- */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.group-button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  padding: var(--space-3) var(--space-4);
+}
+
+.code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--color-primary);
+}
+
+/* --- small screens first, then wider layouts --- */
+
+.stack {
+  display: grid;
+  gap: var(--space-4);
+}
+
+@media (min-width: 40rem) {
+  .view {
+    padding: var(--space-6) var(--space-4);
+  }
+
+  .stack-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
