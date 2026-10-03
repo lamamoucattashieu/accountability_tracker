@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-6 are done and merged (PRs #1-#11). The lockin. redesign, comments,
-the forfeit-winner rule and nudges are on `feat/ui-redesign`. Next: Phase 7 (hardening & docs).
+**Current status:** Phases 0-6 and the redesign are merged (PRs #1-#12). **Phase 7** (hardening &
+docs) is done on `feat/phase-7-hardening`. What remains is the report and my own-words cells.
 
 ---
 
@@ -287,6 +287,24 @@ Recorded so later phases stay consistent with them. Each one was an open questio
   a chat (conversations, threads, unread state, no live updates without WebSockets) would have
   taken time from testing, docs and the report. Future work.
 
+**Phase 7: Hardening & docs**
+- Coverage is measured on core logic: `.coveragerc` omits the `routes.py` files (thin HTTP glue,
+  checked end to end instead). Chosen over TestClient route tests, which would need `httpx` as a
+  new dependency. Result: 303 tests, 99% of core logic. Recorded as ADR-4.
+- Auth service tests added (40% to 99%): registration rules, login, sessions, groups.
+- Auth routes return 422, not 400, for invalid registration and group input.
+- Security pass: passwords are PBKDF2-SHA256 with a per-password salt and a constant-time
+  compare; the session cookie is HttpOnly and SameSite=Lax, and now Secure when
+  `COOKIE_SECURE=true` (off by default because local runs are plain http). An outsider and a
+  logged-out user were checked against all 18 group-scoped endpoints: every one returns 403 or
+  401. Uploads keep their content/size/pixel/path-traversal checks. Accepted gaps: no rate
+  limiting on login, and 8-character invite codes (32 bits), fine for friend groups.
+- File count is 53 against the ~50 guideline: the extra files are tests, the README and the
+  small `.coveragerc`. A `pyproject.toml` could have held the coverage config, but the deployment
+  script might mistake it for a second dependency manifest.
+- Verified from a fresh clone: starts in under a second with no `.env` and the default
+  `DATA_DIR`, creates the schema itself, and the README's coverage command gives the same result.
+
 ---
 
 ## Phases
@@ -318,7 +336,7 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    UNIQUE constraint holds); proof upload reuses `app/shared/uploads.py`.
 6. **Frontend** (done, PR #10; restyled with social features on `feat/ui-redesign`): simple HTML/JS pages for everything
    above. If time is short, cut to the minimum usable pages rather than eat into Phase 7.
-7. **Hardening & docs:** coverage to ≥70% on service logic, README (setup + coverage command),
+7. **Hardening & docs** (done on `feat/phase-7-hardening`): coverage to ≥70% on service logic, README (setup + coverage command),
    and a security pass (password hashing, session cookie flags, upload size/type/path-traversal
    checks, group membership checked on every group-scoped endpoint). Also generate the
    architecture diagram and database schema diagram from the **actual** code, so they match
