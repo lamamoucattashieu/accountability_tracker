@@ -13,6 +13,7 @@ const state = {
   votes: new Map(), // check-in id -> vote result, display only: the server's 409 stays the source of truth
   feedFilter: "all", // "all" or "wins" (accepted check-ins only); a display filter
   focusPost: false, // the camera button asks the home page to jump to the post form
+  nudgesForMe: [], // nudges received today in the open group
 };
 
 const viewRoot = document.getElementById("view");
@@ -304,6 +305,7 @@ function switchCrew() {
 function resetState() {
   Object.assign(state, {
     me: null, group: null, tab: "home", names: new Map(), votes: new Map(), feedFilter: "all", focusPost: false,
+    nudgesForMe: [],
   });
 }
 
@@ -405,9 +407,12 @@ function openGroup(group) {
 
 function renderGroup(root) {
   root.append(notice("Loading your crew…"));
-  groups.members(state.group.id)
-    .then((members) => {
+  Promise.all([groups.members(state.group.id), checkins.nudgesForMe(state.group.id)])
+    .then(([members, nudges]) => {
       state.names = new Map(members.map((member) => [member.id, member.username]));
+      state.nudgesForMe = nudges;
+      // A red dot on your avatar while you have nudges from today.
+      userBar.querySelector(".avatar-button")?.classList.toggle("has-alert", nudges.length > 0);
       root.replaceChildren();
       groupTabs[state.tab].render(root);
     })
@@ -437,6 +442,8 @@ function renderHome(root) {
   }, "");
 
   root.append(
+    ...state.nudgesForMe.map((nudge) => el("p", { class: "nudge-banner", role: "status" },
+      icon("feed"), el("strong", { text: `${nameOf(nudge.nudger_id)}: ` }), nudge.message)),
     el("div", { class: "page-head" },
       eyebrow(`${weekday}, the plot continues`, { live: true }),
       headline("okay, what are we ", "doing", " this week?"),
@@ -735,8 +742,12 @@ function renderCrew(root) {
   );
 
   loadInto(forfeit, () => points.forfeits(state.group.id), renderForfeitCard, "");
-  loadInto(people, () => points.leaderboard(state.group.id), (container, board) => {
-    container.append(el("ul", { class: "list" }, ...board.entries.map(memberCard)));
+  // Points gives the ranking, Goals & Check-ins gives who can be nudged; the UI joins them by user id.
+  const peopleData = () => Promise.all([points.leaderboard(state.group.id), checkins.progress(state.group.id)]);
+  loadInto(people, peopleData, (container, [board, progress]) => {
+    const progressById = new Map(progress.map((row) => [row.user_id, row]));
+    container.append(el("ul", { class: "list" },
+      ...board.entries.map((entry) => memberCard(entry, progressById.get(entry.user_id)))));
   }, "");
 }
 
@@ -770,14 +781,22 @@ function renderForfeitCard(container, forfeits) {
   ));
 }
 
-function memberCard(entry) {
+function progressText(progress) {
+  if (progress.finished_week) {
+    return "locked in: every goal done this week";
+  }
+  return progress.posted_today ? "posted proof today" : "no proof yet today. interesting.";
+}
+
+function memberCard(entry, progress) {
   const isMe = entry.user_id === state.me.id;
   return el("li", { class: isMe ? "member-card me" : "member-card" },
     el("div", { class: "person" },
       avatar(entry.user_id, entry.username),
       el("div", { class: "person-text" },
         el("span", { class: "person-name", text: isMe ? `${entry.username} (you)` : entry.username }),
-        el("span", { class: "muted", text: `@${entry.username} · #${entry.rank} this week` }),
+        el("span", { class: "muted", text: `${progressText(progress)} · #${entry.rank} this week` }),
+        nudgeControl(entry, progress),
       ),
     ),
     el("div", { class: "member-points" },
@@ -785,6 +804,38 @@ function memberCard(entry) {
       entry.streak_bonus > 0 ? badge(`streak +${entry.streak_bonus}`, "warning") : null,
     ),
   );
+}
+
+// The server decides who can be nudged (can_nudge); the button only appears then.
+function nudgeControl(entry, progress) {
+  if (progress.nudged_today) {
+    return badge("nudged today", "success");
+  }
+  if (!progress.can_nudge) {
+    return null;
+  }
+  const form = actionForm({
+    fields: [input(`What should ${entry.username} see?`, {
+      name: "message", maxlength: "140", placeholder: "don't be a loser, get to work and get it done.",
+    })],
+    submitLabel: "send nudge",
+    submitIcon: "feed",
+    onSubmit: async (data) => {
+      await checkins.nudge(state.group.id, entry.user_id, data.get("message"));
+      refreshGroup();
+    },
+  });
+  form.hidden = true;
+  const open = el("button", {
+    type: "button",
+    class: "nudge-button small",
+    onclick: () => {
+      form.hidden = false;
+      open.hidden = true;
+      form.querySelector("input").focus();
+    },
+  }, icon("feed"), "nudge");
+  return el("div", { class: "nudge" }, open, form);
 }
 
 // --- Stats: this week's numbers and past forfeits (Points & Forfeits) ----------

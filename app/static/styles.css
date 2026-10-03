@@ -829,6 +829,51 @@ input[type="file"]::file-selector-button {
   white-space: nowrap;
 }
 
+.nudge {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+button.nudge-button {
+  justify-self: start;
+  color: var(--ink);
+  background: var(--lime);
+  box-shadow: var(--shadow-small);
+}
+
+.nudge-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  font-size: 1.15rem;
+  font-weight: 700;
+  background: var(--coral);
+  border: var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  transform: rotate(-1deg);
+  overflow-wrap: anywhere;
+}
+
+/* Red dot on the avatar while you have nudges from today. */
+.avatar-button.has-alert {
+  position: relative;
+}
+
+.avatar-button.has-alert::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0.9rem;
+  height: 0.9rem;
+  background: var(--danger);
+  border: 2px solid var(--cream);
+  border-radius: 50%;
+}
+
 /* --- stats ------------------------------------------------------------------- */
 
 .stat-grid {
