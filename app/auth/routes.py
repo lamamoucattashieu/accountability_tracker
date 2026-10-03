@@ -4,6 +4,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.auth import service
+from app.config import settings
 from app.db import get_db
 
 SESSION_COOKIE = "session_id"
@@ -42,8 +43,9 @@ def _set_session_cookie(response: Response, token: str):
     response.set_cookie(
         key=SESSION_COOKIE,
         value=token,
-        httponly=True,
-        samesite="lax",
+        httponly=True,  # JavaScript can't read it, so XSS can't steal it
+        samesite="lax",  # not sent on cross-site POSTs, which blocks CSRF
+        secure=settings.cookie_secure,  # https only when deployed
         max_age=7 * 24 * 60 * 60,
     )
 
@@ -77,7 +79,9 @@ def logout(response: Response, session_id: Optional[str] = Cookie(default=None))
     if session_id:
         with get_db() as conn:
             service.logout(conn, session_id)
-    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(
+        SESSION_COOKIE, httponly=True, samesite="lax", secure=settings.cookie_secure
+    )
     return {"status": "logged out"}
 
 
