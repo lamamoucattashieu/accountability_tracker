@@ -715,6 +715,11 @@ input[type="file"]::file-selector-button {
 
 /* --- feed -------------------------------------------------------------------- */
 
+/* Posts stay a readable width instead of stretching across a wide screen. */
+.feed-list {
+  max-width: 40rem;
+}
+
 .post {
   display: grid;
   gap: var(--space-4);
@@ -738,7 +743,7 @@ input[type="file"]::file-selector-button {
 
 .photo-frame img {
   width: 100%;
-  max-height: 26rem;
+  max-height: 17rem;
   object-fit: cover;
   border: var(--line);
   border-radius: 12px;

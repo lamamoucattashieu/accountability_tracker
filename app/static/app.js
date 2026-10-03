@@ -426,12 +426,13 @@ function renderHome(root) {
   loadInto(pills, () => board, (container, data) => {
     countdown.textContent = timeLeftInWeek(data.week_start);
     const mine = data.entries.find((entry) => entry.user_id === state.me.id);
-    container.append(
+    // Built with filter(): the DOM's own append() would print a skipped pill as "null".
+    container.append(...[
       el("span", { class: "pill pill-yellow" }, icon("flame"), `${mine.points} pts this week`,
         el("span", { class: "muted", text: mine.points ? "don't fumble" : "the week is young" })),
       mine.streak_bonus > 0 ? el("span", { class: "pill pill-lime", text: `streak +${mine.streak_bonus}` }) : null,
       el("span", { class: "pill pill-white", text: `#${mine.rank} in ${state.group.name}` }),
-    );
+    ].filter(Boolean));
   }, "");
 
   root.append(
@@ -592,7 +593,7 @@ function renderFeed(root) {
 function loadFeed(feed) {
   const filter = FEED_FILTERS[state.feedFilter];
   loadInto(feed, async () => (await checkins.feed(state.group.id)).filter(filter.keep), (container, items) => {
-    container.append(el("ul", { class: "list" }, ...items.map((item) => postCard(item, feed))));
+    container.append(el("ul", { class: "list feed-list" }, ...items.map((item) => postCard(item, feed))));
   }, filter.empty);
 }
 
@@ -676,7 +677,7 @@ function renderCrew(root) {
     forfeit,
     el("section", { class: "section" },
       el("div", { class: "section-head" },
-        el("div", {}, eyebrow("Currently in the trenches"), el("h2", { text: "Your people" })),
+        el("h2", { text: "Your people" }),
         el("span", { class: "muted", text: `${state.names.size} in ${state.group.name}` }),
       ),
       people,
