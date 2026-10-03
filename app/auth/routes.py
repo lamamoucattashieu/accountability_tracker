@@ -56,7 +56,7 @@ def register(body: RegisterRequest, response: Response):
         except service.UsernameTakenError:
             raise HTTPException(status_code=409, detail="username already taken")
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=422, detail=str(exc))
     _set_session_cookie(response, token)
     return {"username": body.username}
 
@@ -92,7 +92,7 @@ def create_group(body: GroupCreateRequest, user=Depends(get_current_user)):
         try:
             group = service.create_group(conn, user["id"], body.name)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=422, detail=str(exc))
     return dict(group)
 
 
