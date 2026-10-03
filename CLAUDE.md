@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-5 are done and merged (PRs #1-#9), so both domains are complete.
-**Phase 6** (frontend) is implemented on `feat/phase-6-frontend`. Next: Phase 7 (hardening & docs).
+**Current status:** Phases 0-6 are done and merged (PRs #1-#11). The lockin. redesign, comments,
+the forfeit-winner rule and nudges are on `feat/ui-redesign`. Next: Phase 7 (hardening & docs).
 
 ---
 
@@ -316,7 +316,7 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    uploads proof.
    *Done when:* settlement is tested for ties, empty weeks, and concurrent first requests (the
    UNIQUE constraint holds); proof upload reuses `app/shared/uploads.py`.
-6. **Frontend** (implemented on `feat/phase-6-frontend`): simple HTML/JS pages for everything
+6. **Frontend** (done, PR #10; restyled with social features on `feat/ui-redesign`): simple HTML/JS pages for everything
    above. If time is short, cut to the minimum usable pages rather than eat into Phase 7.
 7. **Hardening & docs:** coverage to ≥70% on service logic, README (setup + coverage command),
    and a security pass (password hashing, session cookie flags, upload size/type/path-traversal
