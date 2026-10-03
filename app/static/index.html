@@ -3,20 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Accountability Tracker</title>
+  <title>lockin.</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script type="module" src="/static/app.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <h1 class="brand">Accountability<span>Tracker</span></h1>
+    <div class="brand">
+      <span class="logo">lockin.</span>
+      <span class="tagline">No ghosting your goals</span>
+    </div>
+    <nav id="top-nav" class="top-nav" aria-label="Sections"></nav>
     <div id="user-bar" class="user-bar"></div>
   </header>
   <main id="view" class="view" aria-live="polite">
     <p class="notice">Loading…</p>
   </main>
+  <nav id="bottom-nav" class="bottom-nav" aria-label="Sections" hidden></nav>
   <noscript>
-    <p class="notice notice-error">This app needs JavaScript to run.</p>
+    <p class="notice notice-error">lockin. needs JavaScript to run.</p>
   </noscript>
 </body>
 </html>
