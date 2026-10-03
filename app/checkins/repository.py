@@ -1,4 +1,4 @@
-from app.config import COMMENT_MAX_LENGTH
+from app.config import COMMENT_MAX_LENGTH, NUDGE_MAX_LENGTH
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS goals (
@@ -35,12 +35,28 @@ CREATE TABLE IF NOT EXISTS checkin_comments (
     text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND {COMMENT_MAX_LENGTH}),
     created_at TEXT NOT NULL
 );
+
+-- One nudge per person, per nudger, per UTC day: UNIQUE makes spamming impossible.
+CREATE TABLE IF NOT EXISTS nudges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id),
+    nudger_id INTEGER NOT NULL REFERENCES users(id),
+    nudged_id INTEGER NOT NULL REFERENCES users(id),
+    message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND {NUDGE_MAX_LENGTH}),
+    day TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (group_id, nudger_id, nudged_id, day),
+    CHECK (nudger_id != nudged_id)
+);
 """
 
 
 def create_tables(conn):
     # The comment length limit comes from config.py, so it isn't a duplicated magic number.
-    conn.executescript(CREATE_TABLES_SQL.replace("{COMMENT_MAX_LENGTH}", str(COMMENT_MAX_LENGTH)))
+    conn.executescript(
+        CREATE_TABLES_SQL.replace("{COMMENT_MAX_LENGTH}", str(COMMENT_MAX_LENGTH))
+        .replace("{NUDGE_MAX_LENGTH}", str(NUDGE_MAX_LENGTH))
+    )
 
 
 def insert_goal(conn, group_id, user_id, title, description, times_per_week, created_at):
@@ -171,4 +187,64 @@ def list_comments(conn, checkin_id):
         ORDER BY created_at, id
         """,
         (checkin_id,),
+    ).fetchall()
+
+
+# --- nudges ---
+
+def goal_progress(conn, group_id, since):
+    """Each active goal with its accepted check-ins since `since` (the week's start)."""
+    return conn.execute(
+        """
+        SELECT goals.id AS goal_id, goals.user_id, goals.times_per_week,
+               (SELECT COUNT(*) FROM checkins
+                WHERE checkins.goal_id = goals.id
+                  AND checkins.status = 'accepted'
+                  AND checkins.created_at >= ?) AS done
+        FROM goals
+        WHERE goals.group_id = ? AND goals.archived_at IS NULL
+        """,
+        (since, group_id),
+    ).fetchall()
+
+
+def users_who_posted_since(conn, group_id, since):
+    rows = conn.execute(
+        """
+        SELECT DISTINCT goals.user_id FROM checkins
+        JOIN goals ON goals.id = checkins.goal_id
+        WHERE goals.group_id = ? AND checkins.created_at >= ?
+        """,
+        (group_id, since),
+    ).fetchall()
+    return {row["user_id"] for row in rows}
+
+
+def insert_nudge(conn, group_id, nudger_id, nudged_id, message, day, created_at):
+    cur = conn.execute(
+        """
+        INSERT INTO nudges (group_id, nudger_id, nudged_id, message, day, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (group_id, nudger_id, nudged_id, message, day, created_at),
+    )
+    return cur.lastrowid
+
+
+def nudges_sent_on(conn, group_id, nudger_id, day):
+    rows = conn.execute(
+        "SELECT nudged_id FROM nudges WHERE group_id = ? AND nudger_id = ? AND day = ?",
+        (group_id, nudger_id, day),
+    ).fetchall()
+    return {row["nudged_id"] for row in rows}
+
+
+def nudges_received_on(conn, group_id, nudged_id, day):
+    return conn.execute(
+        """
+        SELECT id, nudger_id, message, created_at FROM nudges
+        WHERE group_id = ? AND nudged_id = ? AND day = ?
+        ORDER BY created_at, id
+        """,
+        (group_id, nudged_id, day),
     ).fetchall()

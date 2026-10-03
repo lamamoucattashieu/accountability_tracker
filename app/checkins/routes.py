@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -26,6 +27,11 @@ STATUS_CODES = {
     service.VotingClosed: 409,
     service.AlreadyVoted: 409,
     service.InvalidComment: 422,
+    service.MemberNotFound: 404,
+    service.CannotNudgeYourself: 422,
+    service.NotNudgeable: 409,
+    service.AlreadyNudged: 409,
+    service.InvalidNudge: 422,
     InvalidImage: 415,
     ImageTooLarge: 413,
 }
@@ -42,6 +48,10 @@ class GoalCreateRequest(BaseModel):
 
 class CommentRequest(BaseModel):
     text: str
+
+
+class NudgeRequest(BaseModel):
+    message: Optional[str] = None
 
 
 class GoalUpdateRequest(BaseModel):
@@ -169,5 +179,34 @@ def add_comment(checkin_id: int, body: CommentRequest, user=Depends(get_current_
     with get_db() as conn:
         try:
             return service.add_comment(conn, user["id"], checkin_id, body.text)
+        except HANDLED_ERRORS as exc:
+            raise _to_http_error(exc)
+
+
+@router.get("/groups/{group_id}/progress", tags=["nudges"])
+def group_progress(group_id: int, user=Depends(get_current_user)):
+    with get_db() as conn:
+        try:
+            return service.group_progress(conn, user["id"], group_id, datetime.now(timezone.utc))
+        except HANDLED_ERRORS as exc:
+            raise _to_http_error(exc)
+
+
+@router.post("/groups/{group_id}/members/{member_id}/nudges", status_code=201, tags=["nudges"])
+def send_nudge(group_id: int, member_id: int, body: NudgeRequest, user=Depends(get_current_user)):
+    with get_db() as conn:
+        try:
+            return service.send_nudge(
+                conn, user["id"], group_id, member_id, body.message, datetime.now(timezone.utc)
+            )
+        except HANDLED_ERRORS as exc:
+            raise _to_http_error(exc)
+
+
+@router.get("/groups/{group_id}/nudges", tags=["nudges"])
+def my_nudges(group_id: int, user=Depends(get_current_user)):
+    with get_db() as conn:
+        try:
+            return service.my_nudges_today(conn, user["id"], group_id, datetime.now(timezone.utc))
         except HANDLED_ERRORS as exc:
             raise _to_http_error(exc)
