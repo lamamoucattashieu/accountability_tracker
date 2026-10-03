@@ -60,6 +60,7 @@ const ICON_PATHS = {
   invite: ["M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2", "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
     "M19 8v6", "M22 11h-6"],
   reject: ["M18 6 6 18", "M6 6l12 12"],
+  comment: ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"],
 };
 
 function icon(name) {
@@ -617,7 +618,56 @@ function postCard(item, feed) {
       voteControl(item, feed),
       el("span", { class: "muted", text: formatWhen(item.created_at) }),
     ),
+    commentsSection(item),
   );
+}
+
+// Comments open on demand, so the feed doesn't make one request per post.
+function commentsSection(item) {
+  let count = item.comment_count;
+  const label = () => (count === 1 ? "1 comment" : `${count} comments`);
+  const panel = el("div", { class: "comments", hidden: true });
+  const toggle = el("button", {
+    type: "button",
+    class: "outline small",
+    "aria-expanded": "false",
+    onclick: () => {
+      panel.hidden = !panel.hidden;
+      toggle.setAttribute("aria-expanded", String(!panel.hidden));
+      if (!panel.hidden) {
+        loadComments();
+      }
+    },
+  }, icon("comment"), label());
+  const list = el("div");
+  const reply = actionForm({
+    fields: [input("Reply", { name: "text", required: true, placeholder: "say something (nice-ish)", autocomplete: "off" })],
+    submitLabel: "send",
+    onSubmit: async (data, form) => {
+      await checkins.addComment(item.id, data.get("text"));
+      form.reset();
+      count += 1;
+      toggle.lastChild.textContent = label();
+      loadComments();
+    },
+  });
+  panel.append(list, reply);
+
+  function loadComments() {
+    loadInto(list, () => checkins.comments(item.id), (container, comments) => {
+      container.append(el("ul", { class: "list comment-list" }, ...comments.map((comment) =>
+        el("li", { class: "comment" },
+          avatar(comment.author_id),
+          el("div", { class: "person-text" },
+            el("span", {}, el("strong", { text: nameOf(comment.author_id) }),
+              el("span", { class: "muted", text: ` · ${timeAgo(comment.created_at)}` })),
+            el("span", { class: "comment-text", text: comment.text }),
+          ),
+        ))));
+    }, "No comments yet. Start the roast.");
+  }
+
+  return el("div", { class: "comments-wrap" }, toggle, panel);
 }
 
 // Display-only rules: no vote button on your own check-ins, or after you voted
@@ -693,14 +743,17 @@ function renderCrew(root) {
 function renderForfeitCard(container, forfeits) {
   const thisWeek = forfeits.this_week.forfeit;
   const upcoming = forfeits.upcoming.forfeit;
-  const setForfeit = actionForm({
+  // Display-only: the form shows for last week's winner(s); the server still
+  // rejects anyone else with a 403.
+  const setters = forfeits.setters.map((setter) => nameOf(setter.id)).join(", ");
+  const setForfeit = forfeits.can_set ? actionForm({
     fields: [input("Set next week's forfeit", { name: "text", required: true, placeholder: "e.g. last place renames the group chat" })],
     submitLabel: "set forfeit",
     onSubmit: async (data) => {
       await points.setForfeit(state.group.id, data.get("text"));
       refreshGroup();
     },
-  });
+  }) : el("p", { class: "muted", text: `Only last week's #1 sets the forfeit: ${setters}.` });
   container.append(el("section", { class: "card card-yellow" },
     el("div", { class: "split" },
       el("div", { class: "section" },

@@ -775,6 +775,36 @@ input[type="file"]::file-selector-button {
   gap: var(--space-1);
 }
 
+.comments-wrap,
+.comments {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.comments-wrap > button {
+  justify-self: start;
+}
+
+.comment {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.comment .avatar {
+  width: 2.4rem;
+  height: 2.4rem;
+  font-size: 0.8rem;
+}
+
+.comment-list {
+  gap: var(--space-3);
+}
+
+.comment-text {
+  overflow-wrap: anywhere;
+}
+
 /* --- crew -------------------------------------------------------------------- */
 
 .member-card {

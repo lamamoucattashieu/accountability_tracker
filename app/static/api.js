@@ -107,6 +107,9 @@ export const checkins = {
   create: (goalId, photo, caption) =>
     request("POST", `/goals/${goalId}/checkins`, { form: photoForm(photo, { caption }) }),
   voteReject: (checkinId) => request("POST", `/checkins/${checkinId}/votes`),
+  comments: (checkinId) => request("GET", `/checkins/${checkinId}/comments`),
+  addComment: (checkinId, text) =>
+    request("POST", `/checkins/${checkinId}/comments`, { json: { text } }),
 };
 
 // --- Points & Forfeits domain ---
