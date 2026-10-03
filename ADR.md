@@ -143,6 +143,14 @@ erDiagram
     }
 ```
 
+## 4. Testing approach: pure rules and services against a real temporary SQLite, routes checked end to end
+Date: 2026-10-03
+Status: Decided
+Context: The assignment asks for at least 70% coverage of core business logic, and the riskiest code is where rules meet the database: scoring a check-in only once, rejecting and settling exactly once under concurrent requests, and week boundaries. Mocking the database would fake exactly the SQL constraints those guarantees rely on.
+Decision: Business rules are pure functions tested with plain values and an explicit `now`, and every service is tested against a fresh SQLite file in pytest's tmp_path (the real schema from init_db, never the real database), including a two-connection race on settlement. Coverage is measured on core logic only (services, rules, repositories, config, shared modules), with the thin routes.py files excluded in .coveragerc.
+Alternatives considered: Route tests through FastAPI's TestClient, rejected because they need httpx as a new dependency and would mostly test framework glue; the routes were checked with end-to-end runs against a real server instead. Mocking the repository layer, rejected because the guarantees live in UNIQUE, CHECK and conditional UPDATE statements that a mock would only pretend to have.
+Consequences: Core logic is at 99%, with tests that exercise the real constraints and a real race, so the 70% bar is met with a wide margin. In exchange the HTTP layer (request parsing, status-code mapping) has no automated tests, so a mistake there would only show up in a manual or end-to-end run.
+
 ## 5. Deliberately not built: voting on forfeit proof
 Date: 2026-10-02
 Status: Decided
