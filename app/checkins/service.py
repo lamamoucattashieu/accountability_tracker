@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from app.auth import service as auth_service
 from app.checkins import repository
-from app.config import VOTING_WINDOW
+from app.config import COMMENT_MAX_LENGTH, VOTING_WINDOW
 from app.points import service as points_service
 from app.shared import uploads
 from app.shared.timeutils import utc_now_iso
@@ -72,6 +72,10 @@ class VotingClosed(CheckinsError):
 
 
 class AlreadyVoted(CheckinsError):
+    pass
+
+
+class InvalidComment(CheckinsError):
     pass
 
 
@@ -293,3 +297,36 @@ def cast_rejection_vote(conn, voter_id: int, checkin_id: int) -> dict:
         "reject_votes": reject_votes,
         "votes_needed": votes_needed(eligible_voters),
     }
+
+
+# --- comments on proof ---
+
+def _get_checkin_for_member(conn, user_id: int, checkin_id: int):
+    checkin = repository.get_checkin(conn, checkin_id)
+    if checkin is None:
+        raise CheckinNotFound("check-in not found")
+    if not auth_service.is_member(conn, checkin["group_id"], user_id):
+        raise NotGroupMember("not a member of this group")
+    return checkin
+
+
+def _validate_comment(text) -> str:
+    text = (text or "").strip()
+    if not 1 <= len(text) <= COMMENT_MAX_LENGTH:
+        raise InvalidComment(f"comment must be 1-{COMMENT_MAX_LENGTH} characters")
+    return text
+
+
+def add_comment(conn, user_id: int, checkin_id: int, text) -> dict:
+    """Any member can reply to any check-in in their group, including their own."""
+    _get_checkin_for_member(conn, user_id, checkin_id)
+    comment_id = repository.insert_comment(
+        conn, checkin_id, user_id, _validate_comment(text), utc_now_iso()
+    )
+    return next(dict(c) for c in repository.list_comments(conn, checkin_id) if c["id"] == comment_id)
+
+
+def list_comments(conn, user_id: int, checkin_id: int) -> list[dict]:
+    """A check-in's comments, oldest first, for members of its group only."""
+    _get_checkin_for_member(conn, user_id, checkin_id)
+    return [dict(c) for c in repository.list_comments(conn, checkin_id)]

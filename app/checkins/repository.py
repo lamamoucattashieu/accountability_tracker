@@ -1,3 +1,5 @@
+from app.config import COMMENT_MAX_LENGTH
+
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS goals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,11 +27,20 @@ CREATE TABLE IF NOT EXISTS checkin_votes (
     created_at TEXT NOT NULL,
     UNIQUE (checkin_id, voter_id)
 );
+
+CREATE TABLE IF NOT EXISTS checkin_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    checkin_id INTEGER NOT NULL REFERENCES checkins(id),
+    author_id INTEGER NOT NULL REFERENCES users(id),
+    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND {COMMENT_MAX_LENGTH}),
+    created_at TEXT NOT NULL
+);
 """
 
 
 def create_tables(conn):
-    conn.executescript(CREATE_TABLES_SQL)
+    # The comment length limit comes from config.py, so it isn't a duplicated magic number.
+    conn.executescript(CREATE_TABLES_SQL.replace("{COMMENT_MAX_LENGTH}", str(COMMENT_MAX_LENGTH)))
 
 
 def insert_goal(conn, group_id, user_id, title, description, times_per_week, created_at):
@@ -88,7 +99,9 @@ def insert_checkin(conn, goal_id, photo_path, caption, created_at):
 
 # Joining goals is fine here: both tables belong to this domain.
 CHECKIN_WITH_GOAL_SQL = """
-    SELECT checkins.*, goals.group_id, goals.user_id, goals.title AS goal_title
+    SELECT checkins.*, goals.group_id, goals.user_id, goals.title AS goal_title,
+           (SELECT COUNT(*) FROM checkin_comments
+            WHERE checkin_comments.checkin_id = checkins.id) AS comment_count
     FROM checkins
     JOIN goals ON goals.id = checkins.goal_id
 """
@@ -140,3 +153,22 @@ def mark_rejected(conn, checkin_id):
         (checkin_id,),
     )
     return cur.rowcount == 1
+
+
+def insert_comment(conn, checkin_id, author_id, text, created_at):
+    cur = conn.execute(
+        "INSERT INTO checkin_comments (checkin_id, author_id, text, created_at) VALUES (?, ?, ?, ?)",
+        (checkin_id, author_id, text, created_at),
+    )
+    return cur.lastrowid
+
+
+def list_comments(conn, checkin_id):
+    return conn.execute(
+        """
+        SELECT id, checkin_id, author_id, text, created_at FROM checkin_comments
+        WHERE checkin_id = ?
+        ORDER BY created_at, id
+        """,
+        (checkin_id,),
+    ).fetchall()

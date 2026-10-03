@@ -181,3 +181,52 @@ def test_photo_is_deleted_when_recording_points_fails(conn, data_dir, alice, goa
     with pytest.raises(sqlite3.OperationalError):
         service.create_checkin(conn, alice, goal["id"], image_file(), None)
     assert stored_files(data_dir) == []
+
+
+# --- comments on proof ---
+
+def test_member_comments_on_a_checkin(conn, bob, checkin):
+    comment = service.add_comment(conn, bob, checkin["id"], "  okay that's actually impressive  ")
+    assert comment["text"] == "okay that's actually impressive"
+    assert comment["author_id"] == bob
+    assert comment["created_at"].endswith("+00:00")
+
+
+def test_author_can_reply_on_their_own_checkin(conn, alice, bob, checkin):
+    service.add_comment(conn, bob, checkin["id"], "is that even you?")
+    service.add_comment(conn, alice, checkin["id"], "yes, receipts attached")
+    comments = service.list_comments(conn, alice, checkin["id"])
+    assert [c["author_id"] for c in comments] == [bob, alice]  # oldest first
+
+
+def test_feed_shows_the_comment_count(conn, alice, bob, group_id, checkin):
+    service.add_comment(conn, bob, checkin["id"], "nice")
+    [item] = service.list_group_checkins(conn, alice, group_id)
+    assert item["comment_count"] == 1
+
+
+@pytest.mark.parametrize("text", ["", "   ", None, "x" * 281])
+def test_invalid_comment_is_rejected(conn, bob, checkin, text):
+    with pytest.raises(service.InvalidComment):
+        service.add_comment(conn, bob, checkin["id"], text)
+
+
+def test_comment_at_the_length_limit_is_accepted(conn, bob, checkin):
+    assert len(service.add_comment(conn, bob, checkin["id"], "x" * 280)["text"]) == 280
+
+
+def test_non_member_cannot_comment_or_read_comments(conn, outsider, checkin):
+    with pytest.raises(service.NotGroupMember):
+        service.add_comment(conn, outsider, checkin["id"], "hi")
+    with pytest.raises(service.NotGroupMember):
+        service.list_comments(conn, outsider, checkin["id"])
+
+
+def test_comment_on_missing_checkin_is_not_found(conn, bob):
+    with pytest.raises(service.CheckinNotFound):
+        service.add_comment(conn, bob, 999, "hi")
+
+
+def test_database_also_enforces_the_comment_length(conn, bob, checkin):
+    with pytest.raises(sqlite3.IntegrityError):
+        repository.insert_comment(conn, checkin["id"], bob, "x" * 281, "2026-10-03T10:00:00+00:00")
