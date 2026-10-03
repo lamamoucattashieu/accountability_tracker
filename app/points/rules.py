@@ -4,29 +4,15 @@ No database and no clock: callers pass `now`, so every rule is tested with
 fixed times. The service orchestrates these with the database.
 """
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from app.config import PROOF_DEADLINE, SETTLEMENT_DELAY
+from app.shared.timeutils import monday_of, week_begins_at, week_start_for  # noqa: F401 (re-exported)
 
 WEEK = timedelta(weeks=1)
 
 
-# --- weeks ---
-
-def monday_of(day: date) -> date:
-    """The Monday of the week a calendar day falls in. Weeks run Monday to Sunday."""
-    return day - timedelta(days=day.weekday())
-
-
-def week_start_for(moment: datetime) -> date:
-    """The week a moment belongs to, with weeks starting Monday 00:00 UTC."""
-    return monday_of(moment.astimezone(timezone.utc).date())
-
-
-def week_begins_at(week_start: date) -> datetime:
-    """Monday 00:00 UTC of a week, as a moment."""
-    return datetime.combine(week_start, time.min, tzinfo=timezone.utc)
-
+# --- weeks (the week definition itself lives in app/shared/timeutils.py) ---
 
 def settles_at(week_start: date) -> datetime:
     """Week end + SETTLEMENT_DELAY: from then on no vote can change the week's ranking."""

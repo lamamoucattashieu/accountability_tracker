@@ -10,6 +10,9 @@ VOTING_WINDOW = timedelta(hours=48)
 SETTLEMENT_DELAY = VOTING_WINDOW
 PROOF_DEADLINE = timedelta(days=7)
 FORFEIT_MAX_LENGTH = 200
+COMMENT_MAX_LENGTH = 280
+NUDGE_MAX_LENGTH = 140
+DEFAULT_NUDGE_MESSAGE = "don't be a loser, get to work and get it done."
 
 
 class Settings:

@@ -7,14 +7,19 @@ import { ApiError, auth, checkins, groups, onUnauthorized, points } from "./api.
 
 const state = {
   me: null, // {id, username} of the logged-in user
-  group: null, // the group being viewed
-  tab: null, // which group tab is open
+  group: null, // the group (crew) being viewed
+  tab: "home", // which section of the group is open
   names: new Map(), // user id -> username for the open group
   votes: new Map(), // check-in id -> vote result, display only: the server's 409 stays the source of truth
+  feedFilter: "all", // "all" or "wins" (accepted check-ins only); a display filter
+  focusPost: false, // the camera button asks the home page to jump to the post form
+  nudgesForMe: [], // nudges received today in the open group
 };
 
 const viewRoot = document.getElementById("view");
 const userBar = document.getElementById("user-bar");
+const topNav = document.getElementById("top-nav");
+const bottomNav = document.getElementById("bottom-nav");
 
 // --- DOM helpers -------------------------------------------------------------
 
@@ -36,6 +41,44 @@ function el(tag, attrs = {}, ...children) {
   }
   node.append(...children.filter((child) => child !== null && child !== undefined));
   return node;
+}
+
+// Line icons, drawn from fixed path data with createElementNS (no markup strings).
+const ICON_PATHS = {
+  home: ["M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"],
+  feed: ["M13 2 3 14h9l-1 8 10-12h-9l1-8z"],
+  crew: ["M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2", "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+    "M22 21v-2a4 4 0 0 0-3-3.87", "M16 3.13a4 4 0 0 1 0 7.75"],
+  stats: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z", "M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12z",
+    "M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"],
+  camera: ["M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z",
+    "M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"],
+  flame: ["M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"],
+  plus: ["M12 5v14", "M5 12h14"],
+  trophy: ["M8 21h8", "M12 17v4", "M7 4h10v5a5 5 0 0 1-10 0V4z", "M17 5h3v2a3 3 0 0 1-3 3",
+    "M7 5H4v2a3 3 0 0 0 3 3"],
+  check: ["M20 6 9 17l-5-5"],
+  invite: ["M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2", "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+    "M19 8v6", "M22 11h-6"],
+  reject: ["M18 6 6 18", "M6 6l12 12"],
+  comment: ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"],
+};
+
+function icon(name) {
+  const svgNs = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNs, "svg");
+  for (const [key, value] of Object.entries({
+    viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2",
+    "stroke-linecap": "round", "stroke-linejoin": "round", class: "icon", "aria-hidden": "true",
+  })) {
+    svg.setAttribute(key, value);
+  }
+  for (const d of ICON_PATHS[name]) {
+    const path = document.createElementNS(svgNs, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
 }
 
 function notice(text, kind = "info") {
@@ -60,20 +103,23 @@ function select(label, attrs, options) {
     el("select", attrs, ...options.map(({ value, text }) => el("option", { value, text }))));
 }
 
+function eyebrow(text, { live = false } = {}) {
+  return el("p", { class: "eyebrow" }, live ? el("span", { class: "live-dot" }) : null, text);
+}
+
+// "okay, what are we " + underlined("doing") + " this week?"
+function headline(before, underlined, after, tag = "h1") {
+  return el(tag, { class: "headline" }, before, el("span", { class: "underline", text: underlined }), after);
+}
+
+function badge(text, kind) {
+  return el("span", { class: `badge badge-${kind}`, text });
+}
+
 function formatWhen(isoTime) {
   return new Date(isoTime).toLocaleString(undefined, {
     weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
   });
-}
-
-// Gateway-style composition: the check-ins and goals APIs return only user_ids
-// (that domain never reads auth's tables), and the members API returns names.
-// The UI joins the two here, the way a gateway would after a service split.
-function nameOf(userId) {
-  if (state.me && userId === state.me.id) {
-    return "You";
-  }
-  return state.names.get(userId) || "A member";
 }
 
 // "2026-09-28" -> "28 Sep". Weeks are UTC dates, so format them in UTC.
@@ -83,8 +129,22 @@ function formatDay(isoDate) {
   });
 }
 
-function badge(text, kind) {
-  return el("span", { class: `badge badge-${kind}`, text });
+function timeAgo(isoTime) {
+  const seconds = Math.max(0, (Date.now() - new Date(isoTime).getTime()) / 1000);
+  const units = [["d", 86400], ["h", 3600], ["m", 60]];
+  for (const [suffix, size] of units) {
+    if (seconds >= size) {
+      return `${Math.floor(seconds / size)}${suffix}`;
+    }
+  }
+  return "now";
+}
+
+// Time until the end of the week the server reports (its week_start + 7 days).
+function timeLeftInWeek(weekStart) {
+  const end = new Date(`${weekStart}T00:00:00Z`).getTime() + 7 * 24 * 3600 * 1000;
+  const hours = Math.max(0, Math.floor((end - Date.now()) / 3600000));
+  return `${Math.floor(hours / 24)}d ${String(hours % 24).padStart(2, "0")}h left`;
 }
 
 // Loading, empty and error states in one place, so every list behaves the same.
@@ -105,10 +165,10 @@ async function loadInto(container, fetchData, render, emptyText) {
 
 // A form whose submit button is disabled while the request runs and which
 // shows the API's error message under the fields.
-function actionForm({ fields, submitLabel, onSubmit }) {
+function actionForm({ fields, submitLabel, submitIcon, onSubmit, extraActions = [] }) {
   const error = el("p", { class: "form-error", role: "alert" });
-  const button = el("button", { type: "submit", text: submitLabel });
-  const form = el("form", {}, ...fields, button, error);
+  const button = el("button", { type: "submit" }, submitIcon ? icon(submitIcon) : null, submitLabel);
+  const form = el("form", {}, ...fields, el("div", { class: "form-actions" }, button, ...extraActions), error);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     error.textContent = "";
@@ -124,7 +184,31 @@ function actionForm({ fields, submitLabel, onSubmit }) {
   return form;
 }
 
-// --- Views -------------------------------------------------------------------
+// --- People ------------------------------------------------------------------
+
+// Gateway-style composition: the check-ins and goals APIs return only user_ids
+// (that domain never reads auth's tables), and the members API returns names.
+// The UI joins the two here, the way a gateway would after a service split.
+function usernameOf(userId) {
+  return state.names.get(userId) || "member";
+}
+
+function nameOf(userId) {
+  return state.me && userId === state.me.id ? "You" : usernameOf(userId);
+}
+
+const AVATAR_COLORS = ["coral", "purple", "yellow", "lime"];
+
+function initials(username) {
+  return username.slice(0, 2).toUpperCase();
+}
+
+function avatar(userId, username = usernameOf(userId)) {
+  const color = AVATAR_COLORS[userId % AVATAR_COLORS.length];
+  return el("span", { class: `avatar avatar-${color}`, "aria-hidden": "true", text: initials(username) });
+}
+
+// --- Views and navigation ----------------------------------------------------
 
 // View map: adding a screen means adding an entry, not another if/else branch.
 const views = {
@@ -133,10 +217,58 @@ const views = {
   group: renderGroup,
 };
 
+// Sections inside a crew, keyed by name. Home and Feed are the Goals & Check-ins
+// domain; Crew and Stats are the Points & Forfeits domain.
+const groupTabs = {
+  home: { label: "home", icon: "home", render: renderHome },
+  feed: { label: "feed", icon: "feed", render: renderFeed },
+  crew: { label: "crew", icon: "crew", render: renderCrew },
+  stats: { label: "stats", icon: "stats", render: renderStats },
+};
+
 function show(name) {
   renderUserBar();
+  renderNav(name === "group");
   viewRoot.replaceChildren();
   views[name](viewRoot);
+}
+
+function openTab(name) {
+  state.tab = name;
+  show("group");
+  window.scrollTo(0, 0);
+}
+
+function refreshGroup() {
+  show("group"); // re-render from fresh API data; the open tab is kept in state.tab
+}
+
+function goPost() {
+  state.focusPost = true;
+  openTab("home");
+}
+
+function renderNav(inGroup) {
+  topNav.replaceChildren();
+  bottomNav.replaceChildren();
+  bottomNav.hidden = !inGroup;
+  document.body.classList.toggle("has-bottom-nav", inGroup);
+  if (!inGroup) {
+    return;
+  }
+  const navButton = (name, withIcon) => el("button", {
+    type: "button",
+    "aria-current": state.tab === name ? "page" : "false",
+    onclick: () => openTab(name),
+  }, withIcon ? icon(groupTabs[name].icon) : null, groupTabs[name].label);
+
+  topNav.append(...Object.keys(groupTabs).map((name) => navButton(name, false)));
+  const names = Object.keys(groupTabs);
+  bottomNav.append(
+    ...names.slice(0, 2).map((name) => navButton(name, true)),
+    el("button", { type: "button", class: "camera-button", "aria-label": "Post proof", onclick: goPost }, icon("camera")),
+    ...names.slice(2).map((name) => navButton(name, true)),
+  );
 }
 
 function renderUserBar() {
@@ -144,10 +276,37 @@ function renderUserBar() {
   if (!state.me) {
     return;
   }
-  userBar.append(
-    el("span", { text: `Hi, ${state.me.username}` }),
-    el("button", { type: "button", text: "Log out", onclick: logOut }),
+  const menu = el("div", { class: "menu", id: "user-menu", hidden: true },
+    el("p", { text: `@${state.me.username}` }),
+    state.group ? el("button", { type: "button", class: "light small", text: "switch crew", onclick: switchCrew }) : null,
+    el("button", { type: "button", class: "outline small", text: "log out", onclick: logOut }),
   );
+  const button = el("button", {
+    type: "button",
+    class: "avatar-button",
+    "aria-label": "Account menu",
+    "aria-haspopup": "true",
+    "aria-expanded": "false",
+    "aria-controls": "user-menu",
+    text: initials(state.me.username),
+    onclick: () => {
+      menu.hidden = !menu.hidden;
+      button.setAttribute("aria-expanded", String(!menu.hidden));
+    },
+  });
+  userBar.append(button, menu);
+}
+
+function switchCrew() {
+  state.group = null;
+  show("groups");
+}
+
+function resetState() {
+  Object.assign(state, {
+    me: null, group: null, tab: "home", names: new Map(), votes: new Map(), feedFilter: "all", focusPost: false,
+    nudgesForMe: [],
+  });
 }
 
 async function startSession() {
@@ -159,10 +318,12 @@ async function logOut() {
   try {
     await auth.logout();
   } finally {
-    Object.assign(state, { me: null, group: null, tab: null, names: new Map(), votes: new Map() });
+    resetState();
     show("auth");
   }
 }
+
+// --- Auth and crew picker ----------------------------------------------------
 
 function renderAuth(root) {
   const credentials = () => [
@@ -171,7 +332,7 @@ function renderAuth(root) {
   ];
   const login = actionForm({
     fields: credentials(),
-    submitLabel: "Log in",
+    submitLabel: "log in",
     onSubmit: async (data) => {
       await auth.login(data.get("username"), data.get("password"));
       await startSession();
@@ -179,20 +340,21 @@ function renderAuth(root) {
   });
   const register = actionForm({
     fields: credentials(),
-    submitLabel: "Create account",
+    submitLabel: "create account",
     onSubmit: async (data) => {
       await auth.register(data.get("username"), data.get("password"));
       await startSession();
     },
   });
   root.append(
-    el("section", { class: "card" },
-      el("h2", { text: "Hold each other to it" }),
-      el("p", { class: "muted", text: "Set weekly goals with friends, post photo proof, and the week's lowest scorer does the forfeit." }),
+    el("div", { class: "page-head" },
+      eyebrow("No ghosting your goals"),
+      headline("lock in with ", "your people", "."),
+      el("p", { class: "lede", text: "Set weekly goals with friends, post photo proof, and the week's lowest scorer does the forfeit everyone agreed on." }),
     ),
-    el("div", { class: "stack stack-2" },
-      el("section", { class: "card" }, el("h2", { text: "Log in" }), login),
-      el("section", { class: "card" }, el("h2", { text: "New here?" }), register),
+    el("div", { class: "split" },
+      el("section", { class: "card" }, el("h2", { text: "welcome back" }), login),
+      el("section", { class: "card card-yellow" }, el("h2", { text: "new here?" }), register),
     ),
   );
 }
@@ -202,188 +364,152 @@ function renderGroups(root) {
   loadInto(list, groups.list, (container, myGroups) => {
     container.append(el("ul", { class: "list" }, ...myGroups.map((group) =>
       el("li", {},
-        el("button", { type: "button", class: "group-button", onclick: () => openGroup(group) },
-          el("span", { text: group.name }),
+        el("button", { type: "button", class: "group-card", onclick: () => openGroup(group) },
+          el("span", { class: "person" },
+            el("span", { class: `avatar avatar-${AVATAR_COLORS[group.id % AVATAR_COLORS.length]}`, text: initials(group.name) }),
+            el("span", { class: "person-name", text: group.name }),
+          ),
           el("span", { class: "code", text: group.invite_code }),
         ),
       ),
     )));
-  }, "You're not in a group yet. Create one, or join with a friend's invite code.");
+  }, "No crew yet. Start one, or join with a friend's invite code.");
 
   const create = actionForm({
-    fields: [input("Group name", { name: "name", required: true })],
-    submitLabel: "Create group",
+    fields: [input("Crew name", { name: "name", required: true, placeholder: "e.g. gym gremlins" })],
+    submitLabel: "start crew",
     onSubmit: async (data) => openGroup(await groups.create(data.get("name"))),
   });
   const join = actionForm({
     fields: [input("Invite code", { name: "invite_code", required: true, autocapitalize: "characters" })],
-    submitLabel: "Join group",
+    submitLabel: "join crew",
     onSubmit: async (data) => openGroup(await groups.join(data.get("invite_code"))),
   });
 
   root.append(
-    el("section", { class: "card" }, el("h2", { text: "Your groups" }), list),
-    el("div", { class: "stack stack-2" },
-      el("section", { class: "card" }, el("h2", { text: "Start a group" }), create),
-      el("section", { class: "card" }, el("h2", { text: "Join friends" }), join),
+    el("div", { class: "page-head" },
+      eyebrow("Pick your crew"),
+      headline("where are we ", "locking in", "?"),
+    ),
+    list,
+    el("div", { class: "split" },
+      el("section", { class: "card card-purple" }, el("h2", { text: "start a crew" }), create),
+      el("section", { class: "card card-lime" }, el("h2", { text: "join your friends" }), join),
     ),
   );
 }
 
 function openGroup(group) {
   state.group = group;
-  state.tab = Object.keys(groupTabs)[0] || null;
+  state.tab = "home";
   show("group");
 }
 
-// Tabs inside a group, keyed by name. Each domain adds its own tabs here.
-const groupTabs = {
-  // Goals & Check-ins domain
-  checkins: { label: "Check-ins", render: renderCheckins },
-  goals: { label: "Goals", render: renderGoals },
-  // Points & Forfeits domain
-  leaderboard: { label: "Leaderboard", render: renderLeaderboard },
-  forfeits: { label: "Forfeits", render: renderForfeits },
-};
-
-function refreshGroup() {
-  show("group"); // re-render from fresh API data; the open tab is kept in state.tab
+function renderGroup(root) {
+  root.append(notice("Loading your crew…"));
+  Promise.all([groups.members(state.group.id), checkins.nudgesForMe(state.group.id)])
+    .then(([members, nudges]) => {
+      state.names = new Map(members.map((member) => [member.id, member.username]));
+      state.nudgesForMe = nudges;
+      // A red dot on your avatar while you have nudges from today.
+      userBar.querySelector(".avatar-button")?.classList.toggle("has-alert", nudges.length > 0);
+      root.replaceChildren();
+      groupTabs[state.tab].render(root);
+    })
+    .catch((error) => root.replaceChildren(notice(errorText(error), "error")));
 }
 
-function renderGroup(root) {
-  const panel = el("div", { class: "tab-panel" });
-  const nav = el("nav", { class: "tabs", "aria-label": "Group sections" });
+// --- Home: post proof and your goals (Goals & Check-ins) ---------------------
 
-  function openTab(name) {
-    state.tab = name;
-    for (const button of nav.children) {
-      button.setAttribute("aria-current", button.dataset.tab === name ? "page" : "false");
-    }
-    panel.replaceChildren();
-    groupTabs[name].render(panel);
-  }
+function renderHome(root) {
+  const weekday = new Date().toLocaleDateString(undefined, { weekday: "long" });
+  const board = points.leaderboard(state.group.id); // shared by the pills and the countdown
+  const pills = el("div", { class: "cluster" });
+  const countdown = el("span", { class: "countdown" });
+  const postArea = el("div");
+  const goals = el("div");
 
-  for (const [name, tab] of Object.entries(groupTabs)) {
-    nav.append(el("button", {
-      type: "button", class: "tab", "data-tab": name, text: tab.label, onclick: () => openTab(name),
-    }));
-  }
+  loadInto(pills, () => board, (container, data) => {
+    countdown.textContent = timeLeftInWeek(data.week_start);
+    const mine = data.entries.find((entry) => entry.user_id === state.me.id);
+    // Built with filter(): the DOM's own append() would print a skipped pill as "null".
+    container.append(...[
+      el("span", { class: "pill pill-yellow" }, icon("flame"), `${mine.points} pts this week`,
+        el("span", { class: "muted", text: mine.points ? "don't fumble" : "the week is young" })),
+      mine.streak_bonus > 0 ? el("span", { class: "pill pill-lime", text: `streak +${mine.streak_bonus}` }) : null,
+      el("span", { class: "pill pill-white", text: `#${mine.rank} in ${state.group.name}` }),
+    ].filter(Boolean));
+  }, "");
 
   root.append(
-    el("section", { class: "card group-header" },
-      el("button", { type: "button", class: "secondary", text: "← Groups", onclick: () => show("groups") }),
-      el("h2", { text: state.group.name }),
-      el("p", { class: "muted" }, "Invite code: ", el("span", { class: "code", text: state.group.invite_code })),
+    ...state.nudgesForMe.map((nudge) => el("p", { class: "nudge-banner", role: "status" },
+      icon("feed"), el("strong", { text: `${nameOf(nudge.nudger_id)}: ` }), nudge.message)),
+    el("div", { class: "page-head" },
+      eyebrow(`${weekday}, the plot continues`, { live: true }),
+      headline("okay, what are we ", "doing", " this week?"),
     ),
-    nav,
-    panel,
+    pills,
+    el("section", { class: "card card-purple", id: "post-proof" },
+      el("span", { class: "ring", "aria-hidden": "true" }),
+      el("div", { class: "row" },
+        el("span", { class: "chip" }, el("span", { class: "chip-dot" }), "weekly check-in"),
+        countdown,
+      ),
+      eyebrow("This week's reality check"),
+      el("h2", { text: "be so for real… did you do the thing?" }),
+      el("p", { class: "muted", text: "Post your proof. Your crew can smell a camera-roll screenshot from a mile away." }),
+      postArea,
+    ),
+    el("section", { class: "section" },
+      el("div", { class: "section-head" },
+        el("div", {}, eyebrow("Your promises"), el("h2", { text: "This week's non-negotiables" })),
+      ),
+      goals,
+    ),
   );
-  panel.append(notice("Loading…"));
-  groups.members(state.group.id)
-    .then((members) => {
-      state.names = new Map(members.map((member) => [member.id, member.username]));
-      if (state.tab) {
-        openTab(state.tab);
-      }
-    })
-    .catch((error) => panel.replaceChildren(notice(errorText(error), "error")));
+
+  const goalsRequest = myGoals(); // one request shared by the post form and the list
+  loadPostForm(postArea, goalsRequest);
+  loadMyGoals(goals, goalsRequest);
 }
 
-// --- Goals & Check-ins tabs ---------------------------------------------------
+const myGoals = async () =>
+  (await checkins.goals(state.group.id)).filter((goal) => goal.user_id === state.me.id);
 
-const CHECKIN_STATUS = {
-  accepted: { text: "Counts", kind: "success" },
-  rejected: { text: "Rejected by vote", kind: "danger" },
-};
-
-function renderCheckins(panel) {
-  const postArea = el("div");
-  const feed = el("div");
-  panel.append(
-    el("section", { class: "card" }, el("h3", { text: "Post a check-in" }), postArea),
-    el("section", { class: "card" }, el("h3", { text: "Group feed" }), feed),
-  );
-
-  const myGoals = async () =>
-    (await checkins.goals(state.group.id)).filter((goal) => goal.user_id === state.me.id);
-  loadInto(postArea, myGoals, (container, goals) => {
+function loadPostForm(postArea, goalsRequest) {
+  loadInto(postArea, () => goalsRequest, (container, goals) => {
     container.append(actionForm({
       fields: [
-        select("Goal", { name: "goal", required: true },
+        select("Which promise?", { name: "goal", required: true },
           goals.map((goal) => ({ value: goal.id, text: goal.title }))),
         input("Photo proof", { name: "photo", type: "file", accept: "image/*", capture: "environment", required: true }),
-        input("Caption (optional)", { name: "caption" }),
+        input("Caption (optional)", { name: "caption", placeholder: "e.g. 5.2K before my brain could negotiate" }),
       ],
-      submitLabel: "Post check-in",
+      submitLabel: "post proof",
+      submitIcon: "camera",
       onSubmit: async (data) => {
         await checkins.create(data.get("goal"), data.get("photo"), data.get("caption"));
-        refreshGroup();
+        openTab("feed");
       },
     }));
-  }, "You don't have a goal yet. Add one in the Goals tab, then post your proof here.");
-
-  loadFeed(feed);
+    if (state.focusPost) {
+      state.focusPost = false;
+      container.scrollIntoView({ behavior: "smooth", block: "center" });
+      container.querySelector("select").focus();
+    }
+  }, "Make a promise first (add a goal below), then post your proof here.");
 }
 
-function loadFeed(feed) {
-  loadInto(feed, () => checkins.feed(state.group.id), (container, items) => {
-    container.append(el("ul", { class: "list" }, ...items.map((item) => checkinCard(item, feed))));
-  }, "No check-ins yet. Be the first to post proof!");
-}
+const GOAL_TAG_COLORS = ["lime", "purple", "coral", "yellow"];
 
-function checkinCard(item, feed) {
-  const status = CHECKIN_STATUS[item.status];
-  return el("li", { class: "checkin" },
-    el("div", { class: "row" },
-      el("strong", { text: nameOf(item.user_id) }),
-      el("span", { class: "muted", text: formatWhen(item.created_at) }),
-    ),
-    el("p", { class: "muted", text: item.goal_title }),
-    el("img", { src: item.photo_url, alt: `${nameOf(item.user_id)}'s proof for ${item.goal_title}`, loading: "lazy" }),
-    item.caption ? el("p", { text: item.caption }) : null,
-    el("div", { class: "row" }, badge(status.text, status.kind), voteControl(item, feed)),
-  );
-}
-
-// Display-only rules: no vote button on your own check-ins, or after you voted
-// this session. The server still enforces both (403 / 409) and the voting window.
-function voteControl(item, feed) {
-  const myVote = state.votes.get(item.id);
-  if (myVote) {
-    return el("span", { class: "muted", text: `You voted (${myVote.reject_votes}/${myVote.votes_needed} to reject)` });
-  }
-  if (item.user_id === state.me.id || item.status === "rejected") {
-    return null;
-  }
-  const error = el("span", { class: "form-error", role: "alert" });
-  const button = el("button", {
-    type: "button",
-    class: "danger",
-    text: "Vote to reject",
-    onclick: async () => {
-      button.disabled = true;
-      error.textContent = "";
-      try {
-        state.votes.set(item.id, await checkins.voteReject(item.id));
-        loadFeed(feed); // show the server's new status, e.g. "Rejected by vote"
-      } catch (failure) {
-        error.textContent = errorText(failure);
-        button.disabled = false;
-      }
-    },
-  });
-  return el("span", { class: "vote" }, button, error);
-}
-
-function renderGoals(panel) {
-  const list = el("div");
-  const create = actionForm({
+function loadMyGoals(container, goalsRequest) {
+  const addForm = actionForm({
     fields: [
-      input("Goal", { name: "title", required: true, placeholder: "e.g. Gym" }),
-      textArea("What counts? (optional)", { name: "description", placeholder: "e.g. at least 45 minutes" }),
+      input("The promise", { name: "title", required: true, placeholder: "e.g. Gym before 6" }),
+      textArea("What counts? (optional)", { name: "description", placeholder: "e.g. Leg day. No mysterious calendar conflicts." }),
       input("Times per week", { name: "times_per_week", inputmode: "numeric", required: true }),
     ],
-    submitLabel: "Add goal",
+    submitLabel: "lock it in",
     onSubmit: async (data) => {
       await checkins.createGoal(state.group.id, {
         title: data.get("title"),
@@ -393,23 +519,39 @@ function renderGoals(panel) {
       refreshGroup();
     },
   });
-  panel.append(
-    el("section", { class: "card" }, el("h3", { text: "Everyone's goals" }), list),
-    el("section", { class: "card" }, el("h3", { text: "Add a goal" }), create),
-  );
+  const addCard = el("section", { class: "card", hidden: true }, el("h3", { text: "add a promise" }), addForm);
+  const addButton = el("button", {
+    type: "button",
+    class: "dashed",
+    onclick: () => {
+      addCard.hidden = !addCard.hidden;
+      if (!addCard.hidden) {
+        addCard.querySelector("input").focus();
+      }
+    },
+  }, icon("plus"), "add one more (dangerous)");
 
-  loadInto(list, () => checkins.goals(state.group.id), (container, goals) => {
-    container.append(el("ul", { class: "list" }, ...goals.map(goalItem)));
-  }, "No goals yet. Add the first one below.");
+  const list = el("div");
+  container.append(list, addButton, addCard);
+  loadInto(list, () => goalsRequest, (target, goals) => {
+    target.append(el("ul", { class: "list" }, ...goals.map(goalCard)));
+  }, "No promises yet. Add your first one.");
 }
 
-function goalItem(goal) {
-  const error = el("span", { class: "form-error", role: "alert" });
-  const archive = goal.user_id === state.me.id
-    ? el("button", {
+function goalCard(goal, index) {
+  const error = el("p", { class: "form-error", role: "alert" });
+  const color = GOAL_TAG_COLORS[index % GOAL_TAG_COLORS.length];
+  return el("li", { class: "goal-card" },
+    el("span", { class: "goal-tag", style: `background: var(--${color})`, text: `${goal.times_per_week}×/WK` }),
+    el("div", { class: "goal-text" },
+      el("span", { class: "goal-title", text: goal.title }),
+      goal.description ? el("span", { class: "muted", text: goal.description }) : null,
+      error,
+    ),
+    el("button", {
       type: "button",
-      class: "secondary",
-      text: "Archive",
+      class: "outline small",
+      text: "archive",
       onclick: async () => {
         try {
           await checkins.archiveGoal(goal.id);
@@ -418,113 +560,375 @@ function goalItem(goal) {
           error.textContent = errorText(failure);
         }
       },
-    })
-    : null;
-  return el("li", { class: "goal" },
-    el("div", { class: "row" },
-      el("div", {},
-        el("strong", { text: goal.title }),
-        el("p", { class: "muted", text: `${nameOf(goal.user_id)} · ${goal.times_per_week}× per week` }),
-      ),
-      archive,
-    ),
-    goal.description ? el("p", { text: goal.description }) : null,
-    error,
+    }),
   );
 }
 
-// --- Points & Forfeits tabs -------------------------------------------------
-// Scores, streaks, losers and proof status all come from the server; these
-// views only display them.
+// --- Feed: everyone's check-ins and reject votes (Goals & Check-ins) ----------
 
-function renderLeaderboard(panel) {
-  const body = el("div");
-  panel.append(el("section", { class: "card" }, body));
-  loadInto(body, () => points.leaderboard(state.group.id), (container, board) => {
-    container.append(
-      el("div", { class: "row" },
-        el("h3", { text: `Week of ${formatDay(board.week_start)}` }),
-        board.provisional ? badge("Provisional", "warning") : badge("Final", "success"),
+const CHECKIN_STICKER = {
+  accepted: { text: "verified sweat", kind: "" },
+  rejected: { text: "rejected by the crew", kind: "sticker-danger" },
+};
+
+const FEED_FILTERS = {
+  all: { label: "all", keep: () => true, empty: "No proof yet. Be the first to post!" },
+  wins: { label: "wins", keep: (item) => item.status === "accepted", empty: "No wins yet this time." },
+};
+
+function renderFeed(root) {
+  const feed = el("div");
+  const toggle = el("div", { class: "segmented", role: "group", "aria-label": "Filter the feed" },
+    ...Object.entries(FEED_FILTERS).map(([name, filter]) => el("button", {
+      type: "button",
+      "aria-pressed": String(state.feedFilter === name),
+      text: filter.label,
+      onclick: () => {
+        state.feedFilter = name;
+        refreshGroup();
+      },
+    })));
+  root.append(
+    el("div", { class: "section-head" },
+      el("div", { class: "page-head" }, eyebrow("Live from the group chat"), el("h1", { class: "headline", text: "The accountability feed" })),
+      toggle,
+    ),
+    feed,
+  );
+  loadFeed(feed);
+}
+
+function loadFeed(feed) {
+  const filter = FEED_FILTERS[state.feedFilter];
+  loadInto(feed, async () => (await checkins.feed(state.group.id)).filter(filter.keep), (container, items) => {
+    container.append(el("ul", { class: "list feed-list" }, ...items.map((item) => postCard(item, feed))));
+  }, filter.empty);
+}
+
+function postCard(item, feed) {
+  const sticker = CHECKIN_STICKER[item.status];
+  return el("li", { class: "post" },
+    el("div", { class: "person" },
+      avatar(item.user_id),
+      el("div", { class: "person-text" },
+        el("span", {}, el("span", { class: "person-name", text: nameOf(item.user_id) }),
+          el("span", { class: "muted", text: ` · ${timeAgo(item.created_at)}` })),
+        el("span", { class: "muted", text: item.goal_title }),
       ),
-      board.provisional
-        ? el("p", { class: "muted", text: "Votes can still change this week's ranking." })
-        : null,
-      el("ol", { class: "list leaderboard" }, ...board.entries.map(leaderboardRow)),
-    );
+    ),
+    el("div", { class: "photo-frame" },
+      el("img", { src: item.photo_url, alt: `${nameOf(item.user_id)}'s proof for ${item.goal_title}`, loading: "lazy" }),
+      el("span", { class: `sticker ${sticker.kind}`, text: sticker.text }),
+      item.caption ? el("span", { class: "caption-bubble", text: item.caption }) : null,
+    ),
+    el("div", { class: "row" },
+      voteControl(item, feed),
+      el("span", { class: "muted", text: formatWhen(item.created_at) }),
+    ),
+    commentsSection(item),
+  );
+}
+
+// Comments open on demand, so the feed doesn't make one request per post.
+function commentsSection(item) {
+  let count = item.comment_count;
+  const label = () => (count === 1 ? "1 comment" : `${count} comments`);
+  const panel = el("div", { class: "comments", hidden: true });
+  const toggle = el("button", {
+    type: "button",
+    class: "outline small",
+    "aria-expanded": "false",
+    onclick: () => {
+      panel.hidden = !panel.hidden;
+      toggle.setAttribute("aria-expanded", String(!panel.hidden));
+      if (!panel.hidden) {
+        loadComments();
+      }
+    },
+  }, icon("comment"), label());
+  const list = el("div");
+  const reply = actionForm({
+    fields: [input("Reply", { name: "text", required: true, placeholder: "say something (nice-ish)", autocomplete: "off" })],
+    submitLabel: "send",
+    onSubmit: async (data, form) => {
+      await checkins.addComment(item.id, data.get("text"));
+      form.reset();
+      count += 1;
+      toggle.lastChild.textContent = label();
+      loadComments();
+    },
+  });
+  panel.append(list, reply);
+
+  function loadComments() {
+    loadInto(list, () => checkins.comments(item.id), (container, comments) => {
+      container.append(el("ul", { class: "list comment-list" }, ...comments.map((comment) =>
+        el("li", { class: "comment" },
+          avatar(comment.author_id),
+          el("div", { class: "person-text" },
+            el("span", {}, el("strong", { text: nameOf(comment.author_id) }),
+              el("span", { class: "muted", text: ` · ${timeAgo(comment.created_at)}` })),
+            el("span", { class: "comment-text", text: comment.text }),
+          ),
+        ))));
+    }, "No comments yet. Start the roast.");
+  }
+
+  return el("div", { class: "comments-wrap" }, toggle, panel);
+}
+
+// Display-only rules: no vote button on your own check-ins, or after you voted
+// this session. The server still enforces both (403 / 409) and the voting window.
+function voteControl(item, feed) {
+  const myVote = state.votes.get(item.id);
+  if (myVote) {
+    return el("span", { class: "badge badge-info", text: `you voted · ${myVote.reject_votes}/${myVote.votes_needed} to reject` });
+  }
+  if (item.user_id === state.me.id || item.status === "rejected") {
+    return el("span");
+  }
+  const error = el("span", { class: "form-error", role: "alert" });
+  const button = el("button", {
+    type: "button",
+    class: "light small",
+    onclick: async () => {
+      button.disabled = true;
+      error.textContent = "";
+      try {
+        state.votes.set(item.id, await checkins.voteReject(item.id));
+        loadFeed(feed); // show the server's new status, e.g. rejected by the crew
+      } catch (failure) {
+        error.textContent = errorText(failure);
+        button.disabled = false;
+      }
+    },
+  }, icon("reject"), "call cap");
+  return el("span", { class: "vote" }, button, error);
+}
+
+// --- Crew: the forfeit and your people (Points & Forfeits) --------------------
+
+function renderCrew(root) {
+  const inviteStatus = el("span", { class: "muted", role: "status" });
+  const invite = el("button", {
+    type: "button",
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(state.group.invite_code);
+        inviteStatus.textContent = `Invite code ${state.group.invite_code} copied.`;
+      } catch {
+        inviteStatus.textContent = `Invite code: ${state.group.invite_code}`;
+      }
+    },
+  }, icon("invite"), "invite a real one");
+
+  const forfeit = el("div");
+  const people = el("div");
+  root.append(
+    el("div", { class: "page-head" },
+      eyebrow("Mutual surveillance, but cute"),
+      headline("Your ", "lock-in", " crew."),
+      el("p", { class: "lede", text: "The people who know “I got busy” is sometimes just code for “I opened TikTok.”" }),
+      el("div", { class: "page-action cluster" }, invite, inviteStatus),
+    ),
+    forfeit,
+    el("section", { class: "section" },
+      el("div", { class: "section-head" },
+        el("h2", { text: "Your people" }),
+        el("span", { class: "muted", text: `${state.names.size} in ${state.group.name}` }),
+      ),
+      people,
+    ),
+  );
+
+  loadInto(forfeit, () => points.forfeits(state.group.id), renderForfeitCard, "");
+  // Points gives the ranking, Goals & Check-ins gives who can be nudged; the UI joins them by user id.
+  const peopleData = () => Promise.all([points.leaderboard(state.group.id), checkins.progress(state.group.id)]);
+  loadInto(people, peopleData, (container, [board, progress]) => {
+    const progressById = new Map(progress.map((row) => [row.user_id, row]));
+    container.append(el("ul", { class: "list" },
+      ...board.entries.map((entry) => memberCard(entry, progressById.get(entry.user_id)))));
   }, "");
 }
 
-function leaderboardRow(entry) {
-  const isMe = entry.user_id === state.me.id;
-  return el("li", { class: isMe ? "entry me" : "entry" },
-    el("span", { class: "rank", text: `#${entry.rank}` }),
-    el("span", { class: "entry-name", text: isMe ? `${entry.username} (you)` : entry.username }),
-    entry.streak_bonus > 0 ? badge(`Streak +${entry.streak_bonus}`, "warning") : null,
-    el("strong", { class: "entry-points", text: `${entry.points} pts` }),
-  );
-}
-
-const OUTCOME_TEXT = {
-  no_forfeit: "No forfeit was set for this week, so nobody had to do one.",
-  no_loser: "Nobody lost: everyone was tied.",
-};
-
-const PROOF_STATUS = {
-  pending: { text: "Proof due", kind: "info" },
-  overdue: { text: "Overdue", kind: "danger" },
-  submitted: { text: "Done", kind: "success" },
-  late: { text: "Done late", kind: "warning" },
-};
-
-function renderForfeits(panel) {
-  const current = el("div");
-  const results = el("div");
-  const setForfeit = actionForm({
-    fields: [input("New forfeit", { name: "text", required: true, placeholder: "e.g. 50 burpees on video" })],
-    submitLabel: "Set forfeit",
+function renderForfeitCard(container, forfeits) {
+  const thisWeek = forfeits.this_week.forfeit;
+  const upcoming = forfeits.upcoming.forfeit;
+  // Display-only: the form shows for last week's winner(s); the server still
+  // rejects anyone else with a 403.
+  const setters = forfeits.setters.map((setter) => nameOf(setter.id)).join(", ");
+  const setForfeit = forfeits.can_set ? actionForm({
+    fields: [input("Set next week's forfeit", { name: "text", required: true, placeholder: "e.g. last place renames the group chat" })],
+    submitLabel: "set forfeit",
     onSubmit: async (data) => {
       await points.setForfeit(state.group.id, data.get("text"));
       refreshGroup();
     },
-  });
-  panel.append(
-    el("section", { class: "card" }, el("h3", { text: "The forfeit" }), current),
-    el("section", { class: "card" },
-      el("h3", { text: "Change the forfeit" }),
-      el("p", { class: "muted", text: "This week's forfeit is locked. A new one applies from next week." }),
-      setForfeit,
+  }) : el("p", { class: "muted", text: `Only last week's #1 sets the forfeit: ${setters}.` });
+  container.append(el("section", { class: "card card-yellow" },
+    el("div", { class: "split" },
+      el("div", { class: "section" },
+        eyebrow(`This week's forfeit · locked since ${formatDay(forfeits.this_week.week_start)}`),
+        el("p", { class: "card-big-text", text: thisWeek ? thisWeek.text : "no forfeit locked in" }),
+        el("p", { class: "muted", text: "Lowest score when the week settles does it. Proof required, no take-backs." }),
+      ),
+      el("div", { class: "inset" },
+        el("p", { class: "eyebrow", text: `Up next · from ${formatDay(forfeits.upcoming.week_start)}` }),
+        el("p", { class: "goal-title", text: upcoming ? upcoming.text : "nothing set yet" }),
+        setForfeit,
+      ),
     ),
-    el("section", { class: "card" }, el("h3", { text: "Past weeks" }), results),
-  );
-
-  loadInto(current, () => points.forfeits(state.group.id), (container, forfeits) => {
-    const thisWeek = forfeits.this_week.forfeit;
-    const upcoming = forfeits.upcoming.forfeit;
-    container.append(el("p", {
-      class: "forfeit-text",
-      text: thisWeek ? thisWeek.text : "No forfeit is locked in for this week.",
-    }));
-    if (upcoming && (!thisWeek || upcoming.id !== thisWeek.id)) {
-      container.append(el("p", {
-        class: "muted",
-        text: `From ${formatDay(forfeits.upcoming.week_start)}: ${upcoming.text}`,
-      }));
-    }
-  }, "");
-
-  loadInto(results, () => points.settlements(state.group.id), (container, settlements) => {
-    container.append(el("ul", { class: "list" }, ...settlements.map(settlementItem)));
-  }, "No finished weeks yet.");
+  ));
 }
 
-function settlementItem(settlement) {
-  const losers = settlement.assignments.length > 0
-    ? el("ul", { class: "list" }, ...settlement.assignments.map(assignmentItem))
-    : el("p", { class: "muted", text: OUTCOME_TEXT[settlement.outcome] });
-  return el("li", { class: "settlement" },
-    el("strong", { text: `Week of ${formatDay(settlement.week_start)}` }),
-    settlement.forfeit ? el("p", { class: "forfeit-text", text: settlement.forfeit }) : null,
-    losers,
+function progressText(progress) {
+  if (progress.finished_week) {
+    return "locked in: every goal done this week";
+  }
+  return progress.posted_today ? "posted proof today" : "no proof yet today. interesting.";
+}
+
+function memberCard(entry, progress) {
+  const isMe = entry.user_id === state.me.id;
+  return el("li", { class: isMe ? "member-card me" : "member-card" },
+    el("div", { class: "person" },
+      avatar(entry.user_id, entry.username),
+      el("div", { class: "person-text" },
+        el("span", { class: "person-name", text: isMe ? `${entry.username} (you)` : entry.username }),
+        el("span", { class: "muted", text: `${progressText(progress)} · #${entry.rank} this week` }),
+        nudgeControl(entry, progress),
+      ),
+    ),
+    el("div", { class: "member-points" },
+      el("div", { text: `${entry.points} pts` }),
+      entry.streak_bonus > 0 ? badge(`streak +${entry.streak_bonus}`, "warning") : null,
+    ),
+  );
+}
+
+// The server decides who can be nudged (can_nudge); the button only appears then.
+function nudgeControl(entry, progress) {
+  if (progress.nudged_today) {
+    return badge("nudged today", "success");
+  }
+  if (!progress.can_nudge) {
+    return null;
+  }
+  const form = actionForm({
+    fields: [input(`What should ${entry.username} see?`, {
+      name: "message", maxlength: "140", placeholder: "don't be a loser, get to work and get it done.",
+    })],
+    submitLabel: "send nudge",
+    submitIcon: "feed",
+    onSubmit: async (data) => {
+      await checkins.nudge(state.group.id, entry.user_id, data.get("message"));
+      refreshGroup();
+    },
+  });
+  form.hidden = true;
+  const open = el("button", {
+    type: "button",
+    class: "nudge-button small",
+    onclick: () => {
+      form.hidden = false;
+      open.hidden = true;
+      form.querySelector("input").focus();
+    },
+  }, icon("feed"), "nudge");
+  return el("div", { class: "nudge" }, open, form);
+}
+
+// --- Stats: this week's numbers and past forfeits (Points & Forfeits) ----------
+
+const PROOF_STATUS = {
+  pending: { text: "proof due", kind: "info" },
+  overdue: { text: "overdue", kind: "danger" },
+  submitted: { text: "done", kind: "success" },
+  late: { text: "done late", kind: "warning" },
+};
+
+const OUTCOME_TEXT = {
+  no_forfeit: "No forfeit was set, so nobody had to do one.",
+  no_loser: "Nobody lost: everyone was tied.",
+};
+
+function renderStats(root) {
+  const weekPill = el("span", { class: "pill pill-white page-action" });
+  const numbers = el("div");
+  const receipts = el("div");
+  root.append(
+    el("div", { class: "page-head" },
+      eyebrow("Receipts from your locked-in era"),
+      headline("The numbers don't ", "lie", "."),
+      el("p", { class: "lede", text: "No vague self-improvement energy. Just cold, hard evidence that you showed up." }),
+      weekPill,
+    ),
+    numbers,
+    el("section", { class: "section" },
+      el("div", {}, eyebrow("Past weeks"), el("h2", { text: "The receipts" })),
+      receipts,
+    ),
+  );
+
+  loadInto(numbers, () => points.leaderboard(state.group.id), (container, board) => {
+    weekPill.textContent = `week of ${formatDay(board.week_start)}`;
+    const mine = board.entries.find((entry) => entry.user_id === state.me.id);
+    container.append(
+      el("div", { class: "stat-grid" },
+        statCard("lime", "stats", "Points this week", mine.points, "pts", "Straight from the scoreboard."),
+        statCard("purple", "flame", "Streak bonus", `+${mine.streak_bonus}`, "pts",
+          mine.streak_bonus ? "Kept a promise two weeks running." : "Hit a goal two weeks in a row to start one."),
+        statCard("coral", "check", "Your rank", `#${mine.rank}`, `/${board.entries.length}`,
+          board.provisional ? "Provisional: votes can still shuffle this." : "Final. It's in the books."),
+      ),
+      standingsCard(board),
+    );
+  }, "");
+
+  loadInto(receipts, () => points.settlements(state.group.id), (container, settlements) => {
+    container.append(el("div", { class: "split" }, ...settlements.map(settlementCard)));
+  }, "No finished weeks yet. The first receipt lands after this week settles.");
+}
+
+function statCard(color, iconName, label, value, unit, caption) {
+  return el("section", { class: `card card-${color}` },
+    el("span", { class: "stat-icon" }, icon(iconName)),
+    el("p", { class: "eyebrow", style: "color: var(--ink)", text: label }),
+    el("p", { class: "stat-number" }, String(value), el("small", { text: unit })),
+    el("p", { class: "muted", text: caption }),
+  );
+}
+
+function standingsCard(board) {
+  const most = Math.max(1, ...board.entries.map((entry) => entry.points));
+  return el("section", { class: "card" },
+    el("div", { class: "row" },
+      el("div", {}, eyebrow("This week, so far"), el("h2", { text: "Standings" })),
+      board.provisional ? badge("provisional", "warning") : badge("final", "success"),
+    ),
+    el("div", { class: "bars" }, ...board.entries.map((entry) => el("div", { class: "bar" },
+      el("span", { class: "muted", text: `${entry.points} pts` }),
+      el("div", { class: "bar-track" },
+        el("div", {
+          class: entry.user_id === state.me.id ? "bar-fill me" : "bar-fill",
+          style: `height: ${Math.round((entry.points / most) * 100)}%`,
+        })),
+      el("span", { class: "bar-label", text: entry.user_id === state.me.id ? "you" : entry.username }),
+    ))),
+  );
+}
+
+function settlementCard(settlement) {
+  const assigned = settlement.assignments.length > 0;
+  return el("section", { class: assigned ? "card card-yellow" : "card" },
+    el("div", { class: "row" },
+      el("div", {}, eyebrow(`Week of ${formatDay(settlement.week_start)}`),
+        el("h3", { text: settlement.forfeit || "no forfeit" })),
+      el("span", { class: "sticker sticker-white", text: assigned ? "unlocked" : "settled" }),
+    ),
+    assigned
+      ? el("ul", { class: "list" }, ...settlement.assignments.map(assignmentItem))
+      : el("p", { class: "muted", text: OUTCOME_TEXT[settlement.outcome] }),
   );
 }
 
@@ -535,20 +939,26 @@ function assignmentItem(assignment) {
   // still rejects anyone else (403) and a second upload (409).
   const upload = isMine && !assignment.proof_url
     ? actionForm({
-      fields: [input("Photo proof", { name: "photo", type: "file", accept: "image/*", capture: "environment", required: true })],
-      submitLabel: "Upload proof",
+      fields: [input("Proof you did it", { name: "photo", type: "file", accept: "image/*", capture: "environment", required: true })],
+      submitLabel: "upload proof",
+      submitIcon: "camera",
       onSubmit: async (data) => {
         await points.uploadProof(assignment.id, data.get("photo"));
         refreshGroup();
       },
     })
     : null;
-  return el("li", { class: "assignment" },
+  return el("li", { class: "receipt" },
     el("div", { class: "row" },
-      el("span", {}, el("strong", { text: nameOf(assignment.user_id) }), ` · ${assignment.score} pts`),
+      el("div", { class: "person" },
+        avatar(assignment.user_id),
+        el("div", { class: "person-text" },
+          el("span", { class: "person-name", text: nameOf(assignment.user_id) }),
+          el("span", { class: "muted", text: `${assignment.score} pts · due ${formatWhen(assignment.due_at)}` }),
+        ),
+      ),
       badge(status.text, status.kind),
     ),
-    el("p", { class: "muted", text: `Proof due by ${formatWhen(assignment.due_at)}` }),
     assignment.proof_url
       ? el("img", { src: assignment.proof_url, alt: `${nameOf(assignment.user_id)}'s forfeit proof`, loading: "lazy" })
       : null,
@@ -559,7 +969,7 @@ function assignmentItem(assignment) {
 // --- Start -------------------------------------------------------------------
 
 onUnauthorized(() => {
-  Object.assign(state, { me: null, group: null, tab: null, names: new Map(), votes: new Map() });
+  resetState();
   show("auth");
 });
 

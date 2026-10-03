@@ -39,6 +39,10 @@ class InvalidForfeit(PointsError):
     pass
 
 
+class NotLastWeeksWinner(PointsError):
+    pass
+
+
 class SettlementBusy(PointsError):
     pass
 
@@ -144,10 +148,25 @@ def _forfeit_response(forfeit):
     return {key: forfeit[key] for key in ("id", "text", "set_by", "created_at")}
 
 
+def _last_weeks_winners(conn, group_id: int, now: datetime) -> list[int]:
+    """Everyone ranked #1 last week, ties included (RANK gives them all rank 1).
+
+    Uses last week's ranking as it stands now, from the same scoring query as
+    the leaderboard. In a week where nobody scored, every member is #1, so a
+    new crew can always set its first forfeit.
+    """
+    last_week = week_start_for(now) - rules.WEEK
+    member_ids = [member["id"] for member in auth_service.list_members(conn, group_id)]
+    ranking = _weekly_ranking(conn, group_id, last_week, member_ids)
+    return [row["user_id"] for row in ranking if row["rank"] == 1]
+
+
 def set_forfeit(conn, user_id: int, group_id: int, text: str, now: datetime) -> dict:
-    """Add a new forfeit for the group. It applies from next week: this week's is locked."""
+    """Last week's winner adds a new forfeit. It applies from next week: this week's is locked."""
     _require_member(conn, user_id, group_id)
     ensure_settled(conn, group_id, now)
+    if user_id not in _last_weeks_winners(conn, group_id, now):
+        raise NotLastWeeksWinner("only last week's winner can set the forfeit")
     text = (text or "").strip()
     if not 1 <= len(text) <= FORFEIT_MAX_LENGTH:
         raise InvalidForfeit(f"forfeit must be 1-{FORFEIT_MAX_LENGTH} characters")
@@ -155,18 +174,22 @@ def set_forfeit(conn, user_id: int, group_id: int, text: str, now: datetime) -> 
         conn, group_id, text, user_id, now.isoformat(timespec="seconds")
     )
     response = _forfeit_response(repository.get_forfeit(conn, forfeit_id))
-    response["applies_from"] = (monday_of(now.date()) + rules.WEEK).isoformat()
+    response["applies_from"] = (week_start_for(now) + rules.WEEK).isoformat()
     return response
 
 
 def get_forfeits(conn, user_id: int, group_id: int, now: datetime) -> dict:
-    """This week's locked forfeit and the one that will apply from next week."""
+    """This week's locked forfeit, the one that will apply from next week, and who may set it."""
     _require_member(conn, user_id, group_id)
     ensure_settled(conn, group_id, now)
     forfeits = [dict(f) for f in repository.list_forfeits(conn, group_id)]
     this_week = week_start_for(now)
     next_week = this_week + rules.WEEK
+    winners = _last_weeks_winners(conn, group_id, now)
+    usernames = {m["id"]: m["username"] for m in auth_service.list_members(conn, group_id)}
     return {
+        "can_set": user_id in winners,
+        "setters": [{"id": winner, "username": usernames[winner]} for winner in winners],
         "this_week": {
             "week_start": this_week.isoformat(),
             "forfeit": _forfeit_response(rules.forfeit_for_week(forfeits, this_week)),

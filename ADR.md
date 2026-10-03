@@ -37,6 +37,10 @@ erDiagram
     goals ||--o{ checkins : "proved by"
     checkins ||--o{ checkin_votes : receives
     users ||--o{ checkin_votes : casts
+    checkins ||--o{ checkin_comments : "replied to by"
+    users ||--o{ checkin_comments : writes
+    groups ||--o{ nudges : "happen in"
+    users ||--o{ nudges : "send and receive"
     checkins ||..o| point_events : "checkin_id (no FK)"
     forfeits ||--o{ settlements : "locked for"
     settlements ||--o{ forfeit_assignments : assigns
@@ -86,6 +90,22 @@ erDiagram
     checkin_votes {
         int checkin_id FK "UNIQUE with voter_id"
         int voter_id FK
+        text created_at
+    }
+    checkin_comments {
+        int id PK
+        int checkin_id FK
+        int author_id FK
+        text text "CHECK 1-280 chars"
+        text created_at
+    }
+    nudges {
+        int id PK
+        int group_id FK "UNIQUE with nudger, nudged, day"
+        int nudger_id FK "CHECK != nudged_id"
+        int nudged_id FK
+        text message "CHECK 1-140 chars"
+        text day "UTC date"
         text created_at
     }
     point_events {

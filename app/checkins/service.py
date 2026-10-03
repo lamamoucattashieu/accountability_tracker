@@ -4,10 +4,10 @@ from datetime import datetime, timezone
 
 from app.auth import service as auth_service
 from app.checkins import repository
-from app.config import VOTING_WINDOW
+from app.config import COMMENT_MAX_LENGTH, DEFAULT_NUDGE_MESSAGE, NUDGE_MAX_LENGTH, VOTING_WINDOW
 from app.points import service as points_service
 from app.shared import uploads
-from app.shared.timeutils import utc_now_iso
+from app.shared.timeutils import day_begins_at, utc_now_iso, week_begins_at, week_start_for
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,42 @@ class VotingClosed(CheckinsError):
 
 class AlreadyVoted(CheckinsError):
     pass
+
+
+class InvalidComment(CheckinsError):
+    pass
+
+
+class MemberNotFound(CheckinsError):
+    pass
+
+
+class CannotNudgeYourself(CheckinsError):
+    pass
+
+
+class NotNudgeable(CheckinsError):
+    pass
+
+
+class AlreadyNudged(CheckinsError):
+    pass
+
+
+class InvalidNudge(CheckinsError):
+    pass
+
+
+# --- nudge rule: pure functions, no database ---
+
+def finished_the_week(goal_targets: list[tuple[int, int]]) -> bool:
+    """True when every goal hit its weekly target. (done, times_per_week) pairs;
+    no goals at all counts as not finished, so it can't be a way to dodge nudges."""
+    return bool(goal_targets) and all(done >= target for done, target in goal_targets)
+
+
+def can_be_nudged(finished: bool, posted_today: bool) -> bool:
+    return not finished and not posted_today
 
 
 # --- rejection rule: pure functions, no database ---
@@ -293,3 +329,105 @@ def cast_rejection_vote(conn, voter_id: int, checkin_id: int) -> dict:
         "reject_votes": reject_votes,
         "votes_needed": votes_needed(eligible_voters),
     }
+
+
+# --- comments on proof ---
+
+def _get_checkin_for_member(conn, user_id: int, checkin_id: int):
+    checkin = repository.get_checkin(conn, checkin_id)
+    if checkin is None:
+        raise CheckinNotFound("check-in not found")
+    if not auth_service.is_member(conn, checkin["group_id"], user_id):
+        raise NotGroupMember("not a member of this group")
+    return checkin
+
+
+def _validate_comment(text) -> str:
+    text = (text or "").strip()
+    if not 1 <= len(text) <= COMMENT_MAX_LENGTH:
+        raise InvalidComment(f"comment must be 1-{COMMENT_MAX_LENGTH} characters")
+    return text
+
+
+def add_comment(conn, user_id: int, checkin_id: int, text) -> dict:
+    """Any member can reply to any check-in in their group, including their own."""
+    _get_checkin_for_member(conn, user_id, checkin_id)
+    comment_id = repository.insert_comment(
+        conn, checkin_id, user_id, _validate_comment(text), utc_now_iso()
+    )
+    return next(dict(c) for c in repository.list_comments(conn, checkin_id) if c["id"] == comment_id)
+
+
+def list_comments(conn, user_id: int, checkin_id: int) -> list[dict]:
+    """A check-in's comments, oldest first, for members of its group only."""
+    _get_checkin_for_member(conn, user_id, checkin_id)
+    return [dict(c) for c in repository.list_comments(conn, checkin_id)]
+
+
+# --- nudges ---
+
+def _progress_by_member(conn, group_id: int, now: datetime) -> dict:
+    """{user_id: (finished_the_week, posted_today)} for every member of the group."""
+    week_start = week_begins_at(week_start_for(now)).isoformat()
+    today_start = day_begins_at(now).isoformat()
+    targets = {}
+    for row in repository.goal_progress(conn, group_id, week_start):
+        targets.setdefault(row["user_id"], []).append((row["done"], row["times_per_week"]))
+    posted_today = repository.users_who_posted_since(conn, group_id, today_start)
+    return {
+        member["id"]: (finished_the_week(targets.get(member["id"], [])), member["id"] in posted_today)
+        for member in auth_service.list_members(conn, group_id)
+    }
+
+
+def group_progress(conn, user_id: int, group_id: int, now: datetime) -> list[dict]:
+    """Who finished the week, who posted today, and whom you can nudge right now."""
+    _require_member(conn, user_id, group_id)
+    already_nudged = repository.nudges_sent_on(conn, group_id, user_id, now.date().isoformat())
+    return [
+        {
+            "user_id": member_id,
+            "finished_week": finished,
+            "posted_today": posted_today,
+            "can_nudge": member_id != user_id and can_be_nudged(finished, posted_today)
+            and member_id not in already_nudged,
+            "nudged_today": member_id in already_nudged,
+        }
+        for member_id, (finished, posted_today) in _progress_by_member(conn, group_id, now).items()
+    ]
+
+
+def _validate_nudge_message(message) -> str:
+    message = (message or "").strip()
+    if not message:
+        return DEFAULT_NUDGE_MESSAGE
+    if len(message) > NUDGE_MAX_LENGTH:
+        raise InvalidNudge(f"nudge must be at most {NUDGE_MAX_LENGTH} characters")
+    return message
+
+
+def send_nudge(conn, user_id: int, group_id: int, target_id: int, message, now: datetime) -> dict:
+    """Nudge a member who hasn't finished the week and hasn't posted today, once per day."""
+    _require_member(conn, user_id, group_id)
+    if target_id == user_id:
+        raise CannotNudgeYourself("you can't nudge yourself")
+    progress = _progress_by_member(conn, group_id, now)
+    if target_id not in progress:
+        raise MemberNotFound("that person isn't in this group")
+    if not can_be_nudged(*progress[target_id]):
+        raise NotNudgeable("they're on track today, no nudge needed")
+    message = _validate_nudge_message(message)
+    try:
+        nudge_id = repository.insert_nudge(
+            conn, group_id, user_id, target_id, message,
+            now.date().isoformat(), now.isoformat(timespec="seconds"),
+        )
+    except sqlite3.IntegrityError:  # UNIQUE (group, nudger, nudged, day)
+        raise AlreadyNudged("you already nudged them today")
+    return {"id": nudge_id, "nudged_id": target_id, "message": message}
+
+
+def my_nudges_today(conn, user_id: int, group_id: int, now: datetime) -> list[dict]:
+    """Nudges you received in this group today (UTC), oldest first. They expire with the day."""
+    _require_member(conn, user_id, group_id)
+    return [dict(row) for row in repository.nudges_received_on(conn, group_id, user_id, now.date().isoformat())]

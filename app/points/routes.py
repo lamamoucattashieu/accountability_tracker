@@ -16,6 +16,7 @@ STATUS_CODES = {
     service.GroupNotFound: 404,
     service.NotGroupMember: 403,
     service.InvalidForfeit: 422,
+    service.NotLastWeeksWinner: 403,
     service.SettlementBusy: 503,
     service.AssignmentNotFound: 404,
     service.NotAssignee: 403,

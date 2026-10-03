@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-5 are done and merged (PRs #1-#9), so both domains are complete.
-**Phase 6** (frontend) is implemented on `feat/phase-6-frontend`. Next: Phase 7 (hardening & docs).
+**Current status:** Phases 0-6 are done and merged (PRs #1-#11). The lockin. redesign, comments,
+the forfeit-winner rule and nudges are on `feat/ui-redesign`. Next: Phase 7 (hardening & docs).
 
 ---
 
@@ -65,7 +65,7 @@ driven by one of these, name it in one line (in the plan or the walkthrough, not
 - Photo check-ins as proof of completing a goal
 - Rejection votes: a check-in counts by default, and group members can vote to reject it; once
   the rule is met, it becomes rejected
-- Owns tables: `goals`, `checkins`, `checkin_votes`
+- Owns tables: `goals`, `checkins`, `checkin_votes`, `checkin_comments`, `nudges`
 
 ### Domain 2: Points & Forfeits (`app/points/`)
 - Weekly scoring per group per week, and the leaderboard for the current week
@@ -135,7 +135,7 @@ Never decide these. If one is blank when a phase needs it, stop and ask me.
 | What earns points: each valid check-in, or meeting a goal's weekly target | Phase 4 | Each accepted check-in, but only the first `times_per_week` per goal per week; a rejected one frees its slot for a later one |
 | Point values, and whether streaks give bonuses | Phase 4 | 1 point per counted check-in (`POINTS_PER_COMPLETION`). Streak bonus: +1 (`STREAK_BONUS`) per goal that hit its full weekly target this week and the previous week; flat, not growing |
 | Tie-breaking for lowest score | Phase 5 | No tie-break: everyone tied at the lowest score shares the forfeit, each with their own proof. If every eligible member has the same score (including all zero), nobody loses. No random tie-break (untestable, feels unfair) |
-| How the forfeit is agreed and when it locks | Phase 5 | Any member sets it (text, trimmed, 1-200 chars, else 422). Append-only, never edited. A week's forfeit is the latest one set before that week's Monday 00:00 UTC, so it locks when the week starts; a mid-week change applies from next week |
+| How the forfeit is agreed and when it locks | Phase 5 (changed in the UI redesign) | Only last week's #1 sets it (everyone tied at #1 can; after a week where nobody scored, everyone is #1), using last week's ranking as it stands (403 otherwise). Text trimmed, 1-200 chars, else 422. Append-only, never edited. A week's forfeit is the latest one set before that week's Monday 00:00 UTC, so it locks when the week starts; a mid-week change applies from next week |
 | What happens if the loser never posts proof | Phase 5 | Deadline: 7 days after the settlement's settled_at. Overdue is computed on read, never stored. Late proof is accepted and shown as late. No point penalty, so scoring stays independent of forfeits |
 | Whether members with zero check-ins can "lose" | Phase 5 | Yes; otherwise not participating would be a way out |
 
@@ -265,6 +265,28 @@ Recorded so later phases stay consistent with them. Each one was an open questio
   JS would duplicate a business rule, so the vote button stays and a late vote shows the server's
   409 "voting has closed".
 
+**UI redesign and social features** (branch `feat/ui-redesign`, after Phase 6)
+- The UI follows my "lockin." design references (cream, thick black outlines, hard shadows,
+  purple/lime/coral/yellow, bottom nav with a camera button on phones). Only real data is shown:
+  notifications lists, chat and daily percentages from the references are left out, not faked.
+- Comments on proof: any member can comment on any check-in in their group, including their own
+  (to reply). Trimmed, 1-280 chars (`COMMENT_MAX_LENGTH`), oldest first, no editing or deleting.
+  The feed carries `comment_count`; comments load on demand.
+- Forfeit rule changed: only last week's #1 (ties: everyone at #1) can set the forfeit. The Phase
+  5 lock rule is unchanged, so a forfeit set during this week applies from next Monday.
+- Nudges, kept as simple as possible inside Goals & Check-ins (the rule needs goals and check-ins,
+  so no third domain): someone can be nudged when they haven't hit every goal's weekly target
+  (no goals counts as not done) and haven't posted proof today (UTC day). The server enforces it.
+  The nudger writes the message (max 140 chars, `NUDGE_MAX_LENGTH`); blank sends "don't be a
+  loser, get to work and get it done." One nudge per person per nudger per day (UNIQUE), never
+  yourself (CHECK). The recipient sees today's nudges as a banner on Home and a dot on the avatar;
+  there's no read/unread state, they expire with the day.
+- The week definition (`monday_of`, `week_start_for`, `week_begins_at`) moved to
+  `app/shared/timeutils.py` so both domains use the same Monday 00:00 UTC.
+- Direct messages (DMs) were requested but deliberately not built: with the deadline a day away,
+  a chat (conversations, threads, unread state, no live updates without WebSockets) would have
+  taken time from testing, docs and the report. Future work.
+
 ---
 
 ## Phases
@@ -294,7 +316,7 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    uploads proof.
    *Done when:* settlement is tested for ties, empty weeks, and concurrent first requests (the
    UNIQUE constraint holds); proof upload reuses `app/shared/uploads.py`.
-6. **Frontend** (implemented on `feat/phase-6-frontend`): simple HTML/JS pages for everything
+6. **Frontend** (done, PR #10; restyled with social features on `feat/ui-redesign`): simple HTML/JS pages for everything
    above. If time is short, cut to the minimum usable pages rather than eat into Phase 7.
 7. **Hardening & docs:** coverage to ≥70% on service logic, README (setup + coverage command),
    and a security pass (password hashing, session cookie flags, upload size/type/path-traversal
