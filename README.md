@@ -43,6 +43,27 @@ python main.py
 Open **http://localhost:8000/**. The database schema is created automatically on startup; there is
 no setup step and no `.env` file is needed. The interactive API docs are at **http://localhost:8000/docs**.
 
+## Demo data (optional)
+
+A fresh install starts empty. To see every feature straight away, seed a demo crew once,
+**before** starting the app:
+
+```bash
+python seed_demo.py
+python main.py
+```
+
+Log in as **`maya`** with password **`lockin-demo`**. The crew "gym gremlins" has four members
+(`maya`, `leo`, `zoe`, `sam`, same password), goals, photo check-ins over several weeks, a check-in
+the crew voted down, comments on proof, a nudge waiting for maya, a leaderboard with a streak bonus,
+settled past weeks with forfeit losers (one tie, one proof uploaded), and next week's forfeit,
+which maya may set because she won last week. Open a private window and log in as another member
+to vote, comment or nudge from their side.
+
+The script uses the real service functions, so every rule applies; it only moves timestamps back
+to create past weeks. It refuses to run if the database already has users, so it never mixes demo
+data with real data (use a different `DATA_DIR` for a clean demo). The app itself never seeds data.
+
 ## Configuration
 
 Everything is configured through environment variables, all optional:
@@ -67,7 +88,7 @@ Example: `PORT=9000 DATA_DIR=/tmp/lockin python main.py` (on Windows PowerShell:
 pytest --cov=app --cov-report=term-missing
 ```
 
-Result: **303 tests pass, 99% coverage of core logic** (787 statements, 2 not covered).
+Result: **305 tests pass, 99% coverage of core logic** (787 statements, 2 not covered).
 
 Coverage is measured on the core business logic: services, pure rule functions, repositories,
 config and the shared modules. The `routes.py` files are excluded in [`.coveragerc`](.coveragerc)
