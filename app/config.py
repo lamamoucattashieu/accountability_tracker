@@ -21,6 +21,9 @@ class Settings:
         self.data_dir = Path(os.environ.get("DATA_DIR", "./data"))
         self.db_path = self.data_dir / "app.db"
         self.uploads_dir = self.data_dir / "uploads"
+        # Send the session cookie over https only. Off by default because local runs
+        # use plain http; set COOKIE_SECURE=true when deployed behind https.
+        self.cookie_secure = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
 
 
 settings = Settings()

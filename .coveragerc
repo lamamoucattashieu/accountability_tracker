@@ -1,0 +1,11 @@
+# Coverage measures the core logic: services, rules, repositories, config and
+# shared modules. The routes.py files are thin HTTP glue (parse input, call the
+# service, map errors to status codes) and are checked by end-to-end runs
+# against a real server instead (see ADR-4).
+[run]
+source = app
+omit =
+    */routes.py
+
+[report]
+show_missing = True

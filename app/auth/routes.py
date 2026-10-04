@@ -4,6 +4,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.auth import service
+from app.config import settings
 from app.db import get_db
 
 SESSION_COOKIE = "session_id"
@@ -42,8 +43,9 @@ def _set_session_cookie(response: Response, token: str):
     response.set_cookie(
         key=SESSION_COOKIE,
         value=token,
-        httponly=True,
-        samesite="lax",
+        httponly=True,  # JavaScript can't read it, so XSS can't steal it
+        samesite="lax",  # not sent on cross-site POSTs, which blocks CSRF
+        secure=settings.cookie_secure,  # https only when deployed
         max_age=7 * 24 * 60 * 60,
     )
 
@@ -56,7 +58,7 @@ def register(body: RegisterRequest, response: Response):
         except service.UsernameTakenError:
             raise HTTPException(status_code=409, detail="username already taken")
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=422, detail=str(exc))
     _set_session_cookie(response, token)
     return {"username": body.username}
 
@@ -77,7 +79,9 @@ def logout(response: Response, session_id: Optional[str] = Cookie(default=None))
     if session_id:
         with get_db() as conn:
             service.logout(conn, session_id)
-    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(
+        SESSION_COOKIE, httponly=True, samesite="lax", secure=settings.cookie_secure
+    )
     return {"status": "logged out"}
 
 
@@ -92,7 +96,7 @@ def create_group(body: GroupCreateRequest, user=Depends(get_current_user)):
         try:
             group = service.create_group(conn, user["id"], body.name)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=422, detail=str(exc))
     return dict(group)
 
 
