@@ -305,6 +305,13 @@ Recorded so later phases stay consistent with them. Each one was an open questio
 - Verified from a fresh clone: starts in under a second with no `.env` and the default
   `DATA_DIR`, creates the schema itself, and the README's coverage command gives the same result.
 
+**Demo data** (after Phase 7)
+- A separate command, `python seed_demo.py`, fills an empty `DATA_DIR` with a demo crew so a grader
+  sees every feature (log in as maya / lockin-demo). Chosen over seeding on startup with an env
+  var, so the app itself never seeds and the Azure deployment can't pick up fake data by accident.
+- It uses the real service functions, so every rule holds, and only moves timestamps back to
+  create past weeks. It refuses to run if the database already has users.
+
 ---
 
 ## Phases
