@@ -10,8 +10,8 @@ control, so the deployment contract below is non-negotiable.
 
 Full spec: @docs/assignment_spec.md
 
-**Current status:** Phases 0-6 and the redesign are merged (PRs #1-#12). **Phase 7** (hardening &
-docs) is done on `feat/phase-7-hardening`. What remains is the report and my own-words cells.
+**Current status:** All phases (0-7) and the redesign are done and merged (PRs #1-#13). The code,
+ADRs, README and AI usage log are complete; the report is submitted separately.
 
 ---
 
@@ -336,7 +336,7 @@ Recorded so later phases stay consistent with them. Each one was an open questio
    UNIQUE constraint holds); proof upload reuses `app/shared/uploads.py`.
 6. **Frontend** (done, PR #10; restyled with social features on `feat/ui-redesign`): simple HTML/JS pages for everything
    above. If time is short, cut to the minimum usable pages rather than eat into Phase 7.
-7. **Hardening & docs** (done on `feat/phase-7-hardening`): coverage to ≥70% on service logic, README (setup + coverage command),
+7. **Hardening & docs** (done, PR #13): coverage to ≥70% on service logic, README (setup + coverage command),
    and a security pass (password hashing, session cookie flags, upload size/type/path-traversal
    checks, group membership checked on every group-scoped endpoint). Also generate the
    architecture diagram and database schema diagram from the **actual** code, so they match
