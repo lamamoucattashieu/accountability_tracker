@@ -1,17 +1,25 @@
 # CLAUDE.md
 
 ## Context
-Individual Assignment 1, Software Development & DevOps (IE Madrid). Deadline **2026-10-04 23:59**.
-A habit tracker for friend groups: members set goals, post photo check-ins, compete on a weekly
-leaderboard, and the week's lowest scorer does a forfeit the group agreed on in advance.
+Software Development & DevOps (IE Madrid). A habit tracker for friend groups: members set goals,
+post photo check-ins, compete on a weekly leaderboard, and the week's lowest scorer does a forfeit
+the group agreed on in advance.
 
-This app gets Dockerized and deployed to Azure in Assignment 2 using a shared script we don't
-control, so the deployment contract below is non-negotiable.
+**Assignment 1: submitted and done** (deadline 2026-10-04 23:59). All phases (0-7) and the
+redesign are merged (PRs #1-#13). A1 spec: @docs/assignment_spec.md
 
-Full spec: @docs/assignment_spec.md
+**Assignment 2: in progress.** Deadline **2026-11-22 23:59**. Spec: @docs/assignment2_spec.md
+Nothing is provided: I write the Dockerfiles, compose file, pipeline and deployment myself.
 
-**Current status:** All phases (0-7) and the redesign are done and merged (PRs #1-#13). The code,
-ADRs, README and AI usage log are complete; the report is submitted separately.
+A2 roadmap (from class):
+1. Split the monolith into two services, one per domain (Goals & Check-ins, Points & Forfeits),
+   talking over HTTP, each with its own database.
+2. One Dockerfile per service.
+3. Docker Compose runs the whole system locally with one command.
+4. CI/CD pipelines that take the same images from localhost to the Azure cloud environment.
+
+The Hard constraints and Architecture sections below still describe A1. They will be rewritten for
+A2 in the next commit, once the open split decisions are answered.
 
 ---
 
