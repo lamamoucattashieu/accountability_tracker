@@ -18,8 +18,8 @@ A2 roadmap (from class):
 3. Docker Compose runs the whole system locally with one command.
 4. CI/CD pipelines that take the same images from localhost to the Azure cloud environment.
 
-The Hard constraints and Architecture sections below still describe A1. They will be rewritten for
-A2 in the next commit, once the open split decisions are answered.
+The Hard constraints and Architecture sections below describe A2. The decision tables and Phases
+further down are the A1 record and stay as they are.
 
 ---
 
@@ -51,81 +51,122 @@ driven by one of these, name it in one line (in the plan or the walkthrough, not
 
 ---
 
-## Hard constraints (from the spec, never violate)
-- Single process: FastAPI + SQLite, with a plain HTML/CSS/JS frontend served by the same app
-- Bind `0.0.0.0`, with the port from `PORT` (default 8000)
-- All data under `DATA_DIR` (default `./data`): SQLite at `DATA_DIR/app.db`, uploads at
-  `DATA_DIR/uploads/`
-- One `requirements.txt` at the repo root, soft cap ~12 third-party packages. Don't add any
-  package without asking me.
-- No Dockerfile, docker-compose, `.github/workflows`, IaC, background job runners, cron, Redis,
-  or anything else that assumes a second process
-- No interactive setup: the schema is created automatically on startup
-- Configured through env vars only. The app runs without a `.env` file.
-- Starts with one documented command and is ready within a few seconds
+## Hard constraints (A2 spec, never violate)
+- **Exactly two service containers**, one per domain, each from its own Dockerfile in
+  `services/<name>/` with its own dependency manifest (soft cap ~12 third-party packages per
+  service). Don't add any package without asking me. No third container (gateway, frontend, etc.).
+- **Static UI** in `ui/` (plain HTML/CSS/JS, no build step), deployed to the Azure Storage static
+  website `<prefix>ui`. Service base URLs come from a `config.js` generated at deploy time, never
+  hardcoded. Locally, compose serves `ui/` with stock `nginx:alpine` (folder mounted, no Dockerfile).
+- **Database per service:** SQL Server. Locally, one `mcr.microsoft.com/mssql/server:2022-latest`
+  container with one database per service, created by an idempotent `db/init.sql` run by a one-off
+  compose service. On Azure, one serverless Azure SQL database per service (free offer) on one
+  server `<prefix>-sql`. Each service has its own login with access to its own database only, and
+  reads its connection string from `DATABASE_URL`. No service ever touches the other's database.
+- **HTTP between services only**, each locating the other through an env var. Every outbound
+  call has a timeout. No hardcoded hostnames or ports.
+- **CORS:** each service accepts cross-origin requests only from the UI's origin.
+- **Versioned migrations** in `services/<name>/migrations/`, applied in order on startup, each
+  exactly once (recorded in a `schema_migrations` table). Applied migrations are never edited.
+  Never drop or recreate tables on boot. At least one migration changes a table that already
+  holds data.
+- **`GET /health`** on every service: 200 `{"status", "db", "version": <git sha>}` when it can
+  read and write its own database, 503 otherwise. Reflects its own state, not the other service's.
+- **One log line per request** to stdout: method, path, status, duration.
+- **Dockerfiles:** no `COPY . .`, no secrets or `.env` in the image, pinned dependencies,
+  non-root user.
+- **`docker compose up --build`** from a clean clone brings up the whole system.
+- **CI on every push/PR:** lint, test, coverage ≥70% per service, validate `system.yaml` and both
+  `openapi.yaml`, build every image. CI never connects to Azure SQL.
+- **CD on push to `main` only:** SHA-tagged images to GHCR, deploy to Container Apps (Consumption,
+  min 0 / max 1 replicas), upload the UI to `$web`, then fail the run if `/health` isn't 200 in
+  time. Sign-in through the `<prefix>-github` managed identity over OIDC.
+- **Cold starts:** connect to the database with retries and backoff (paused DB, error 40613). The
+  UI shows a designed "starting up, try again" state for a 503, never a blank page or hang.
+- **No secrets in the repo** (source, workflows, compose file or history). Secrets live in GitHub
+  Actions secrets and reach Container Apps as secrets, never as plain env vars.
+- **Azure allowance:** 2 Container Apps (one environment), 2 serverless SQL databases, 1 storage
+  account, the managed identity. Nothing else, everything in `rg-<prefix>`, all named with my
+  prefix. Nothing changed by hand in the portal after the initial setup.
+- Same stack as A1 (Python + FastAPI). Configured through env vars only.
 
 ---
 
-## Architecture
+## Architecture (A2: two services)
 
-### Domain 1: Goals & Check-ins (`app/checkins/`)
-- Goals created inside a group
-- Photo check-ins as proof of completing a goal
-- Rejection votes: a check-in counts by default, and group members can vote to reject it; once
-  the rule is met, it becomes rejected
-- Owns tables: `goals`, `checkins`, `checkin_votes`, `checkin_comments`, `nudges`
+### Service 1: Goals & Check-ins (`services/checkins/`)
+- Goals, photo check-ins, rejection votes, comments, nudges (as in A1)
+- **Also owns auth** (decided for A2): users, groups, invite codes, sessions and membership,
+  moved in from the A1 shared `app/auth/`. Chosen because Checkins checks membership on almost
+  every request; putting auth in Points would make most Checkins requests cross the seam.
+- Owns tables: `users`, `sessions`, `groups`, `group_members`, `goals`, `checkins`,
+  `checkin_votes`, `checkin_comments`, `nudges`
+- Check-in photos are stored in this service's database (see Photos below)
 
-### Domain 2: Points & Forfeits (`app/points/`)
-- Weekly scoring per group per week, and the leaderboard for the current week
-- A forfeit agreed in advance per group. When a week ends, the lowest scorer is assigned it and
-  must upload photo proof.
-- **Lazy settlement (no cron):** the first request after a week ends settles it. A UNIQUE
-  constraint on `(group_id, week_start)` makes double settlement impossible at the database
-  level, not just in code.
+### Service 2: Points & Forfeits (`services/points/`)
+- Weekly scoring, leaderboard, forfeits, lazy settlement, forfeit proof (as in A1). The
+  `UNIQUE (group_id, week_start)` settlement guarantee carries over to SQL Server.
 - Owns tables: `point_events`, `forfeits`, `settlements`, `forfeit_assignments`
+- Forfeit proof photos are stored in this service's database
+- Gets members, `joined_at` and `group_created_at` from Checkins over HTTP, since it no longer
+  shares a process with auth
 
-### Shared (not a domain)
-- `app/auth/`: users, groups, invite codes, sessions
-- `app/shared/uploads.py`: image saving and validation, used by both domains so neither imports
-  the other for photos
+### The seam (HTTP now)
+- **Server-side cross-seam flow: Checkins calls Points** (decided for A2, keeps ADR-2's direction).
+  `record_completion` / `revoke_completion` become HTTP calls from Checkins to Points, located
+  by an env var (e.g. `POINTS_URL`), with a timeout.
+- The A1 rules still hold: only IDs, timestamps and `times_per_week` cross the seam, and both
+  calls stay **idempotent** on `checkin_id`, so a repeated call is a no-op.
+- **A2 change:** the A1 "one transaction" guarantee (rejection + points change commit together)
+  can't survive the split, because they're now in two databases. That integrity loss goes in ADR-7.
+- **When Points is down** (Claude's recommendation, approved by me): the check-in or rejection is
+  still saved in Checkins, flagged as not yet synced to Points, and the user is told points will
+  update later. Checkins retries unsynced calls lazily on later requests, the same pattern as lazy
+  settlement, so no background job is needed. Retrying is safe because the calls are idempotent.
+- **When Checkins is down:** Points keeps serving the leaderboard and forfeits from its own data
+  if possible. Anything that needs membership fails with a clear 503 message.
+- Every endpoint one service calls on the other must appear in the other's `openapi.yaml` with
+  the same shapes.
 
-### The seam (graded: keep it clean)
-- Checkins talks to Points **only** through `app/points/service.py`:
-  - `record_completion(...)` when a check-in is created
-  - `revoke_completion(...)` when a check-in is rejected
-- Points **never** reads or writes checkins tables, and checkins never touches points tables.
-- Only IDs and timestamps cross the seam, never ORM objects or DB rows. This function boundary
-  is exactly where a future HTTP or message call would go in the microservice split.
-- Both functions must be **idempotent**: recording the same check-in twice, or revoking one that
-  was never recorded or is already revoked, is a no-op, not an error or a double count.
-- Once the signatures exist, changing them requires my approval.
-- **Phase 3 check:** look at `app/points/service.py` first. If these functions don't exist yet,
-  the Phase 3 plan must propose how checkins calls them before Points is implemented (for example
-  a stub with final signatures and no logic, or an injected dependency). Give me the options with
-  trade-offs, and I'll choose. Phase 4 fills in the real logic.
+### Photos
+- Stored as image bytes (`VARBINARY`) in the database of the service that owns them (decided for
+  A2), because containers that scale to zero have no persistent disk and the Azure allowance has
+  no room for blob storage. The 5 MiB `MAX_UPLOAD_BYTES` cap keeps rows bounded. A1's
+  content/size/pixel checks still apply. The `DATA_DIR/uploads/` files of A1 go away.
 
-### Layering inside each domain
+### Layering inside each service
 - `routes.py`: thin endpoints that parse input, call the service, and map results and errors to
   HTTP. No business logic.
 - `service.py`: business logic. Rules (vote threshold, scoring, tie-breaking) are **pure
   functions** that take plain values and return decisions, so they're testable without a DB.
 - `repository.py`: SQL only, with parameterized queries. No business decisions.
-- Flow: request -> route -> service -> repository -> SQLite
+- A client module per outbound dependency (e.g. a points client in Checkins) holds the URL,
+  timeout and error mapping, so services never build HTTP requests themselves.
+- Flow: request -> route -> service -> repository -> SQL Server (or -> client -> other service)
 
 ### Database conventions
-- Foreign keys enabled (`PRAGMA foreign_keys = ON`) on every connection
 - Timestamps stored in UTC, ISO 8601
-- Invariants enforced by constraints where possible (UNIQUE, CHECK, NOT NULL), not only in Python
-- Any write that changes more than one row or table as a single logical action runs in **one
-  transaction** (e.g. vote insert + status change; settlement + forfeit assignment)
-- Schema changes go in the startup schema code (`CREATE TABLE IF NOT EXISTS`). If an existing
-  table needs a new column, tell me, because local DBs from earlier phases won't pick it up
-  automatically.
+- Invariants enforced by constraints where possible (UNIQUE, CHECK, NOT NULL, foreign keys
+  *within* a service), not only in Python. IDs from the other service are plain columns, with
+  integrity enforced in code or deliberately not enforced.
+- Any write that changes more than one row or table in one service as a single logical action
+  runs in **one transaction**
+- Schema changes only through a new numbered migration, never by editing an applied one
 
 ### Errors
 Use meaningful status codes: 401 not logged in, 403 not allowed (e.g. not a group member), 404
-not found, 409 conflicts with current state (duplicate vote, already settled), 422 invalid input.
-Services raise domain errors, and routes translate them. No bare 400s or 500s for expected cases.
+not found, 409 conflicts with current state (duplicate vote, already settled), 422 invalid input,
+503 when the other service or the database is unavailable. Services raise domain errors, and
+routes translate them. No bare 400s or 500s for expected cases.
+
+### Still open (ask me before building)
+- **How Points authenticates the browser's requests.** The session lives in Checkins, and the UI
+  is on a different origin from both services, so cookie and CORS settings change. Options include
+  Points asking Checkins to validate the session, or a signed token. Needed before the split.
+- Service names in compose and Azure (assumed `checkins` and `points` here)
+- Migration approach (numbered SQL files with our own runner, or Alembic) and infrastructure
+  definition (Azure CLI in the workflow, or Bicep/Terraform)
+- How existing A1 SQLite data reaches the new databases, if at all
 
 ---
 
