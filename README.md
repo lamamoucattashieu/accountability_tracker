@@ -5,130 +5,135 @@ photo proof, and the crew keeps each other honest. Friends can call cap on a sus
 reply to it, or nudge someone who's slacking. Points add up on a weekly leaderboard, and the week's
 lowest scorer does the forfeit that last week's winner picked.
 
-Individual Assignment 1, Software Development & DevOps (IE Madrid): a single-process monolith
-built to be Dockerized and deployed to Azure in Assignment 2.
+Software Development & DevOps (IE Madrid). Assignment 1 built it as a single-process monolith;
+Assignment 2 splits it into two services, one per domain, talking over HTTP, each with its own
+database, with a static UI that calls both.
 
 ## Features
 
-| Domain | What it does |
+| Service | What it does |
 |---|---|
-| **Auth & groups** (shared) | Register/login with hashed passwords and a session cookie, crews with invite codes |
-| **Goals & Check-ins** | Weekly goals, photo check-ins, rejection votes, comments on proof, nudges |
-| **Points & Forfeits** | Weekly scoring with a per-goal cap and streak bonus, leaderboard, forfeits, lazy week settlement, proof upload |
+| **checkins** (`services/checkins/`) | Register/login (signed access tokens), crews with invite codes, weekly goals, photo check-ins, rejection votes, comments on proof, nudges |
+| **points** (`services/points/`) | Weekly scoring with a per-goal cap and streak bonus, leaderboard, forfeits, lazy week settlement, proof upload |
+| **UI** (`ui/`) | Static HTML/CSS/JS that calls both services from the browser |
 
-The two feature domains only talk through each other's service functions, never each other's
-tables (see [ADR-2](ADR.md)).
+The services never read each other's database. Checkins tells Points about completions through a
+points outbox (delivered over HTTP, retried until Points takes them); Points asks Checkins who is
+in a group, and keeps the last answer so it can keep serving when Checkins is down.
 
 ## Requirements
 
 - Python 3.13 (3.11+ should work)
-- Nothing else: SQLite ships with Python, and the frontend is plain HTML/CSS/JS served by the app.
+- SQLite ships with Python. (Phase 2 of A2 moves the databases to SQL Server.)
 
-## Setup and run
+## Setup and run (locally, three terminals)
 
 ```bash
 git clone https://github.com/lamamoucattashieu/accountability_tracker.git
 cd accountability_tracker
 python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
-pip install -r requirements.txt
-python main.py
+# Windows: .venv\Scripts\activate      macOS / Linux: source .venv/bin/activate
+pip install -r services/checkins/requirements.txt -r services/points/requirements.txt
 ```
 
-Open **http://localhost:8000/**. The database schema is created automatically on startup; there is
-no setup step and no `.env` file is needed. The interactive API docs are at **http://localhost:8000/docs**.
+Both services need the same two secrets. They have no default, so a service refuses to start
+without them. Pick any values for a local run, and use the same ones in every terminal:
+
+```bash
+# macOS / Linux
+export AUTH_TOKEN_SECRET=local-dev-secret INTERNAL_API_KEY=local-dev-key
+# Windows PowerShell
+$env:AUTH_TOKEN_SECRET="local-dev-secret"; $env:INTERNAL_API_KEY="local-dev-key"
+```
+
+Then:
+
+```bash
+cd services/checkins && python main.py      # terminal 1: http://localhost:8000
+cd services/points && python main.py        # terminal 2: http://localhost:8001
+python -m http.server 5500 -d ui            # terminal 3, from the repo root: the UI
+```
+
+Open **http://localhost:5500/**. Each service creates its schema on startup. API docs:
+http://localhost:8000/docs and http://localhost:8001/docs.
 
 ## Demo data (optional)
 
-A fresh install starts empty. To see every feature straight away, seed a demo crew once,
-**before** starting the app:
+With both services running on empty data folders, seed the demo crew in two halves, each into its
+own service's database:
 
 ```bash
-python seed_demo.py
-python main.py
+cd services/checkins && python seed_demo.py   # people, goals, check-ins, votes, comments, nudges
+cd services/points && python seed_demo.py     # forfeits, settled weeks, proof, next week's forfeit
 ```
 
-Log in as **`maya`** with password **`lockin-demo`**. The crew "gym gremlins" has four members
-(`maya`, `leo`, `zoe`, `sam`, same password), goals, photo check-ins over several weeks, a check-in
-the crew voted down, comments on proof, a nudge waiting for maya, a leaderboard with a streak bonus,
-settled past weeks with forfeit losers (one tie, one proof uploaded), and next week's forfeit,
-which maya may set because she won last week. Open a private window and log in as another member
-to vote, comment or nudge from their side.
-
-The script uses the real service functions, so every rule applies; it only moves timestamps back
-to create past weeks. It refuses to run if the database already has users, so it never mixes demo
-data with real data (use a different `DATA_DIR` for a clean demo). The app itself never seeds data.
+Log in as **`maya`** with password **`lockin-demo`** (`leo`, `zoe` and `sam` use the same
+password). Each half refuses to run on a database that already has data.
 
 ## Configuration
 
-Everything is configured through environment variables, all optional:
+Everything is configured through environment variables:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `8000` | Port to listen on (the app always binds `0.0.0.0`) |
-| `DATA_DIR` | `./data` | Where all data lives: the SQLite file and uploaded photos |
-| `COOKIE_SECURE` | `false` | Set to `true` behind https so the session cookie is only sent over https |
+| Variable | Service | Default | Purpose |
+|---|---|---|---|
+| `PORT` | both | 8000 (checkins), 8001 (points) | Port to listen on (always binds `0.0.0.0`) |
+| `DATA_DIR` | both | `./data` | The service's SQLite file (`checkins.db` / `points.db`) and uploaded photos |
+| `POINTS_URL` | checkins | `http://localhost:8001` | Where Points is |
+| `POINTS_TIMEOUT_S` | checkins | `2` | Timeout of every call to Points |
+| `CHECKINS_URL` | points | `http://localhost:8000` | Where Checkins is |
+| `CHECKINS_TIMEOUT_S` | points | `2` | Timeout of every call to Checkins |
+| `CORS_ORIGINS` | both | `http://localhost:5500` | The UI's origin(s), comma-separated |
+| `AUTH_TOKEN_SECRET` | both | none (secret) | Signs (checkins) and verifies (points) access tokens |
+| `INTERNAL_API_KEY` | both | none (secret) | Proves an `/internal/...` call comes from the other service |
 
-Data locations:
+The UI's service URLs are in `ui/config.js`.
 
-- SQLite database: `DATA_DIR/app.db`
-- Uploaded photos: `DATA_DIR/uploads/`
+## What happens when one service is down
 
-Example: `PORT=9000 DATA_DIR=/tmp/lockin python main.py` (on Windows PowerShell:
-`$env:PORT=9000; $env:DATA_DIR="C:\tmp\lockin"; python main.py`).
+- **Points down:** check-ins and votes still work. Their points wait in the outbox, marked "points
+  pending" in the feed, and are delivered in order on a later check-in, vote or feed load.
+- **Checkins down:** the scoreboard keeps answering from its last copy of the crew, with a notice
+  that it may be out of date. Changes (setting a forfeit, uploading proof) and week settlement wait
+  until Checkins is back, because they need the current crew.
+- **Cold start on Azure:** the UI shows "Starting up…" and retries for about a minute.
 
 ## Tests and coverage
 
+Each service has its own tests, run from its folder:
+
 ```bash
-pytest --cov=app --cov-report=term-missing
+cd services/checkins && pytest --cov=app --cov-report=term-missing
+cd services/points && pytest --cov=app --cov-report=term-missing
 ```
 
-Result: **305 tests pass, 99% coverage of core logic** (787 statements, 2 not covered).
+Result: **checkins 222 tests, 99% of core logic; points 179 tests, 99% of core logic.**
 
-Coverage is measured on the core business logic: services, pure rule functions, repositories,
-config and the shared modules. The `routes.py` files are excluded in [`.coveragerc`](.coveragerc)
-because they are thin HTTP glue (parse input, call a service, map its errors to status codes); they
-were checked with end-to-end runs against a real server instead. Every test uses a temporary
-`DATA_DIR`, never the real database. See [ADR-4](ADR.md) for the testing approach.
+- Unit tests (most of them): pure rules and services against a temporary SQLite. Each service's
+  tests replace the other service with a fake behind its port.
+- Route and adapter tests: the internal endpoints, the internal key, CORS, and the HTTP clients
+  against a stub server (`httpx.MockTransport`).
+- Integration tests across the seam (`services/checkins/tests/integration/`): both real services
+  as separate processes, including with one of them stopped.
+
+The `routes.py` files are excluded from coverage (see [ADR-4](ADR.md)).
 
 ## Project structure
 
 ```
-main.py                  starts the app: binds 0.0.0.0, PORT, schema on startup, serves the UI
-requirements.txt         the one dependency manifest
-app/
-  config.py              environment settings and shared business constants
-  db.py                  SQLite connection (foreign keys on) and schema creation
-  auth/                  users, sessions, groups, invite codes (shared by both domains)
-  checkins/              Goals & Check-ins domain: goals, check-ins, votes, comments, nudges
-  points/                Points & Forfeits domain: scoring, leaderboard, forfeits, settlement
-  shared/                image uploads and the week/time definitions used by both domains
-  static/                the frontend: index.html, styles.css, api.js, app.js
-tests/                   pytest suites per domain, with a temporary DATA_DIR per test
+services/
+  checkins/              auth + Goals & Check-ins: main.py, requirements.txt, app/, tests/, seed_demo.py
+    app/auth/            users, sessions, groups, invite codes, signed access tokens
+    app/checkins/        goals, check-ins, votes, comments, nudges, the points outbox and its HTTP client
+  points/                Points & Forfeits: main.py, requirements.txt, app/, tests/, seed_demo.py
+    app/points/          scoring, leaderboard, forfeits, settlement, the Checkins directory client
+  */app/shared/          small modules copied into both services (time and week rules, uploads,
+                         internal key and CORS)
+ui/                      the static frontend: index.html, config.js, api.js, app.js, styles.css
 ```
 
 Each domain is layered the same way: `routes.py` (HTTP only) → `service.py` (business rules) →
-`repository.py` (parameterised SQL only) → SQLite.
-
-## Deployment contract (Assignment 2)
-
-| Requirement | How it's met |
-|---|---|
-| Single process, one command | `python main.py` |
-| Binds `0.0.0.0` | `uvicorn.run(app, host="0.0.0.0", ...)` in `main.py` |
-| Port from one variable | `PORT`, default 8000 |
-| No interactive setup | Schema created with `CREATE TABLE IF NOT EXISTS` on startup |
-| SQLite at one documented path | `DATA_DIR/app.db` |
-| No external runtime dependency | SQLite file and uploads both live in `DATA_DIR` |
-| One dependency manifest | `requirements.txt` |
-| No Dockerfile or CI needed | None in the repo |
-| Configurable through env vars only | `PORT`, `DATA_DIR`, `COOKIE_SECURE`; no `.env` required |
-| Ready in seconds | Starts in under a second on a laptop |
+`repository.py` (parameterised SQL only) → the service's own database, or a client module → the
+other service.
 
 ## Documentation
 
