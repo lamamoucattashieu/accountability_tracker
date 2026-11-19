@@ -18,8 +18,8 @@ A2 roadmap (from class):
 3. Docker Compose runs the whole system locally with one command.
 4. CI/CD pipelines that take the same images from localhost to the Azure cloud environment.
 
-The Hard constraints and Architecture sections below describe A2. The decision tables and Phases
-further down are the A1 record and stay as they are.
+The Hard constraints, Architecture, A2 decisions and A2 phases sections describe A2. "Decisions
+that are mine" and "A1 phases (done)" are the A1 record and stay as they are.
 
 ---
 
@@ -27,11 +27,24 @@ further down are the A1 record and stay as they are.
 I'll be examined on this code on paper, closed-book, with no notes. Every line has to be
 something I can explain and defend. Optimize for readable, boring, correct code over clever code.
 
+**This protocol applies to ALL work from now on, not only phases:** fixes, refactors, docs,
+infrastructure and Azure setup. Any time a choice is needed, ask me as a question with options,
+trade-offs and your recommendation, and wait for my answer.
+
+1. **PLAN:** read the spec sections that apply (@docs/assignment2_spec.md), then give me a short
+   plan: files, interfaces, schema changes, tests, commit order. Name the course concept behind
+   each choice in one line.
+2. **QUESTIONS:** list every decision the work needs as numbered questions. For each: 2-3
+   options, the trade-off of each, and your recommendation with the reason. Include anything
+   ambiguous in the spec or in conflict with this file. Never pick a default yourself. Then STOP.
+3. **CONFIRM:** after I answer, restate my decisions as a short numbered list and wait for me to
+   say "go". If my answers raise new questions, ask them first. Once I say "go", record each
+   decision in "A2 decisions (mine)".
+4. **BUILD:** on a branch, in small conventional commits. Never push without asking me.
+5. **CLOSE:** the end-of-phase checklist below, including the AI_USAGE.md update.
+
+Standing rules:
 - **One phase at a time.** Don't touch the next phase until I say "next phase".
-- **Plan before code.** Every phase starts with a short plan (files, schema changes, interfaces,
-  commit order). Then stop and wait for my approval.
-- **Don't guess.** If something is ambiguous or a decision listed under "Decisions that are mine"
-  is still open, stop and ask me. Don't pick a "sensible default".
 - **Respect existing code.** If something from an earlier phase conflicts with this file, flag it
   and propose a fix. Don't silently rewrite it.
 - **No scope creep.** No new abstractions, files, or packages I didn't ask for. If you think one
@@ -119,7 +132,7 @@ driven by one of these, name it in one line (in the plan or the walkthrough, not
   calls stay **idempotent** on `checkin_id`, so a repeated call is a no-op.
 - **A2 change:** the A1 "one transaction" guarantee (rejection + points change commit together)
   can't survive the split, because they're now in two databases. That integrity loss goes in ADR-7.
-- **When Points is down** (Claude's recommendation, approved by me): the check-in or rejection is
+- **When Points is down** (my decision, see A2 decisions): the check-in or rejection is
   still saved in Checkins, flagged as not yet synced to Points, and the user is told points will
   update later. Checkins retries unsynced calls lazily on later requests, the same pattern as lazy
   settlement, so no background job is needed. Retrying is safe because the calls are idempotent.
@@ -167,6 +180,21 @@ routes translate them. No bare 400s or 500s for expected cases.
 - Migration approach (numbered SQL files with our own runner, or Alembic) and infrastructure
   definition (Azure CLI in the workflow, or Bicep/Terraform)
 - How existing A1 SQLite data reaches the new databases, if at all
+
+---
+
+## A2 decisions (mine)
+Recorded only after I confirm them (step 3 of How we work), one line each, with the phase they
+came from. Never record a decision I didn't make.
+
+| Decision | From | My answer |
+|---|---|---|
+| Where tests live | Before Phase 1 | Per service, in `services/<name>/tests/` |
+| End-to-end testing | Before Phase 1 | One end-to-end smoke test on the compose stack, on top of unit and integration tests |
+| Where auth lives | Before Phase 1 | Inside Goals & Check-ins (users, groups, invite codes, sessions, membership) |
+| Direction of the server-side cross-seam flow | Before Phase 1 | Checkins calls Points (`record_completion` / `revoke_completion` over HTTP), keeping ADR-2's direction |
+| Behaviour when Points is down | Before Phase 1 | Save the check-in or rejection, flag it as not synced, retry lazily on later Checkins requests (safe because the calls are idempotent) |
+| Where photos are stored | Before Phase 1 | As `VARBINARY` in the database of the service that owns them |
 
 ---
 
@@ -363,7 +391,43 @@ Recorded so later phases stay consistent with them. Each one was an open questio
 
 ---
 
-## Phases
+## A2 phases
+Following the professor's whiteboard roadmap (Context section). Each phase runs the full How we
+work protocol.
+1. **Split** (step 1): two services in `services/checkins/` and `services/points/`, auth moved into
+   Checkins, the seam as HTTP calls with timeouts and the designed failure behaviour, static UI in
+   `ui/`.
+2. **Data** (step 1, a database per service): SQLite to SQL Server, versioned migrations per
+   service, `/health`, request logs.
+3. **Containers** (steps 2-3): one Dockerfile per service, `docker-compose.yml` with SQL Server,
+   `db/init.sql` and nginx for the UI.
+4. **CI** (step 4): lint, tests, coverage ≥70% per service, `system.yaml` and OpenAPI validation,
+   image builds.
+5. **Azure + CD** (step 4): initial Azure setup, images to GHCR, deploy to Container Apps, UI to
+   the storage static website, post-deploy health check.
+6. **Evidence:** a migration on Azure against existing data, docs and diagrams, report evidence,
+   the `submission` tag.
+
+## A2 schedule
+Deadline **Sunday 2026-11-22 23:59**. Every day needs at least one pushed commit (push
+timestamps count).
+
+| Day | Phases | Roughly what |
+|---|---|---|
+| Thu 19 | 1. Split | Two services (checkins, points) talking over HTTP, UI moved to `ui/`, partial-failure behaviour, tests moved per service. ADR-6 draft. |
+| Fri 20 | 2. Data, 3. Containers | SQL Server per service, migrations + `schema_migrations`, retries, `/health`, request logs; then both Dockerfiles and `docker-compose.yml` with SQL Server, db-init and nginx. ADR-7 draft. |
+| Sat 21 | 4. CI, 5. Azure + CD | GitHub Actions CI (lint, tests, coverage ≥70%, validation, image builds); Azure initial setup from `docs/azure_deployment_guide.md` and CD to Container Apps + the storage static website, with only migration 001 deployed. ADR-8 and ADR-9 drafts. |
+| Sun 22 | 6. Evidence and submission | Data on Azure, then migration 002 deployed and the data shown to survive; report evidence, README, ADR-10, AI_USAGE.md complete; tag `submission` on `main` before 23:59. |
+
+- The detail of each phase comes from me at the start of that phase. This table is only the outline.
+- If a phase runs late, tell me as soon as you see it and ask me what to cut. Never cut on your
+  own, and never cut the commit days, the migration evidence, partial-failure handling, the
+  coverage gate, ADR 6-10 or the AI log.
+- At the end of each phase, remind me what is next on the schedule and whether we are on time.
+
+---
+
+## A1 phases (done)
 0. **Scaffold** (done, committed directly on `main` as `3c8ec23`, before PRs were used): `config.py` (env vars `PORT`, `DATA_DIR`), `db.py`
    (connection with foreign keys on, schema created on startup), `main.py` (binds `0.0.0.0`),
    `/health` endpoint.
@@ -404,36 +468,49 @@ stripping, per-group timezones).
 ---
 
 ## Testing
-- pytest + pytest-cov. Tests live in `tests/checkins/` and `tests/points/`.
-- Prioritize pure rule functions, then services against a temporary SQLite DB (point `DATA_DIR`
-  at pytest's `tmp_path`). Never touch the real `./data`.
+- pytest + pytest-cov. Tests live per service, in `services/<name>/tests/`.
+- They follow the **testing pyramid**:
+  - **Unit tests are the majority:** pure rule functions first, then services.
+  - **Integration tests** cover how components work together: service + repository against a
+    SQL Server container, and **at least one test across the seam** (spec §5).
+  - **One end-to-end smoke test** on the compose stack.
+- Tests never connect to Azure SQL (spec §5) and never touch real data.
 - Test behavior and edge cases, not framework glue or routing.
-- Coverage command (goes in the README):
-  `pytest --cov=app --cov-report=term-missing`
-- At the end of each phase, report coverage for that phase's `service.py`.
+- Coverage is ≥70% **per service** on core logic, measured in each service folder; the commands
+  go in the README.
+- At the end of each phase, report coverage per service.
 
 ---
 
-## Process deliverables (I write these, you help)
-- **ADR.md:** exactly 5 entries in the spec's format, spanning at least 3 distinct commit dates.
-  When a phase involves an ADR-worthy decision, give me a draft and tell me which of the 5
-  required entries it fits. I'll edit and commit it myself.
-- **AI_USAGE.md:** one row per meaningful interaction. You may draft the factual columns, but
-  **never write the "In my own words" column**. That column is mine.
+## Process deliverables
+- **ADR.md:** entries 1-5 stay unchanged. If A2 changes one, set it to `Status: Superseded by
+  [N]`. A2 adds exactly ADR-6 to ADR-10 in the same format (6 the split, 7 data and migrations,
+  8 serverless hosting on Azure, 9 pipeline and testing, 10 one thing deliberately not built).
+  When work produces an ADR-worthy decision, draft the entry from **my answers** to your questions
+  and tell me which number it is. I edit and commit it. The new entries must span at least 3
+  distinct commit dates.
+- **AI_USAGE.md:** you update it yourself at the end of every phase, like my A1 rows: one row for
+  the plan + questions, and one row for my answers + the build (more if there were several
+  rounds). Fill Date/commit, Tool, Prompt (my actual prompts and answers, faithfully summarised),
+  Disposition, and What changed & why (including every place you deviated from the approved
+  plan). **Leave "In my own words, how this works" empty: that column is mine.** Infrastructure
+  files (Dockerfiles, compose, workflows, SQL, scripts) are logged like code. Commit the AI log
+  update as its own docs commit.
 - **Report:** the SDLC section draws on the phase reports, so keep them honest about deviations.
 
 ---
 
 ## End of every phase: stop and give me
 1. **Walkthrough:** each new or changed file and key function in plain language, with the data
-   flow (request -> route -> service -> repository -> SQLite)
+   flow (request -> route -> service -> repository -> the database (or the other service))
 2. **Why:** the design reasoning (naming any SOLID principle, smell, or pattern involved) and one
    alternative we didn't choose, with the reason
 3. **3 closed-book questions** like the comprehension check would ask, using real function names
 4. **Notes reminder**, and whether this phase needs an ADR entry (and which one)
-5. **AI_USAGE.md reminder**
-6. **Coverage** for this phase's services
-7. **Git:** a conventional commit message (or several, if the work splits naturally) and the
+5. **AI_USAGE.md rows written**, with "In my own words" left empty
+6. **Coverage** per service
+7. **Commit count and distinct push days so far** (since the A1 submission)
+8. **Git:** a conventional commit message (or several, if the work splits naturally) and the
    branch name
 
 Then wait while I take notes and ask questions.
