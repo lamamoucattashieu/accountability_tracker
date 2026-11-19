@@ -408,6 +408,23 @@ work protocol.
 6. **Evidence:** a migration on Azure against existing data, docs and diagrams, report evidence,
    the `submission` tag.
 
+## A2 schedule
+Deadline **Sunday 2026-11-22 23:59**. Every day needs at least one pushed commit (push
+timestamps count).
+
+| Day | Phases | Roughly what |
+|---|---|---|
+| Thu 19 | 1. Split | Two services (checkins, points) talking over HTTP, UI moved to `ui/`, partial-failure behaviour, tests moved per service. ADR-6 draft. |
+| Fri 20 | 2. Data, 3. Containers | SQL Server per service, migrations + `schema_migrations`, retries, `/health`, request logs; then both Dockerfiles and `docker-compose.yml` with SQL Server, db-init and nginx. ADR-7 draft. |
+| Sat 21 | 4. CI, 5. Azure + CD | GitHub Actions CI (lint, tests, coverage ≥70%, validation, image builds); Azure initial setup from `docs/azure_deployment_guide.md` and CD to Container Apps + the storage static website, with only migration 001 deployed. ADR-8 and ADR-9 drafts. |
+| Sun 22 | 6. Evidence and submission | Data on Azure, then migration 002 deployed and the data shown to survive; report evidence, README, ADR-10, AI_USAGE.md complete; tag `submission` on `main` before 23:59. |
+
+- The detail of each phase comes from me at the start of that phase. This table is only the outline.
+- If a phase runs late, tell me as soon as you see it and ask me what to cut. Never cut on your
+  own, and never cut the commit days, the migration evidence, partial-failure handling, the
+  coverage gate, ADR 6-10 or the AI log.
+- At the end of each phase, remind me what is next on the schedule and whether we are on time.
+
 ---
 
 ## A1 phases (done)
