@@ -1,13 +1,11 @@
 from typing import Optional
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from app.auth import service
-from app.config import settings
+from app.auth.tokens import bearer_token
 from app.db import get_db
-
-SESSION_COOKIE = "session_id"
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 groups_router = APIRouter(prefix="/groups", tags=["groups"])
@@ -31,57 +29,48 @@ class JoinGroupRequest(BaseModel):
     invite_code: str
 
 
-def get_current_user(session_id: Optional[str] = Cookie(default=None)):
+def get_current_user(authorization: Optional[str] = Header(default=None)):
+    """The user behind the "Authorization: Bearer <token>" header, or 401.
+
+    A header, not a cookie: the UI is on another site than the services, where
+    browsers block cookies. The browser never adds the header on its own, so a
+    forged cross-site request carries no login (no CSRF).
+    """
     with get_db() as conn:
-        user = service.get_user_from_session(conn, session_id)
+        user = service.get_user_from_token(conn, bearer_token(authorization))
     if user is None:
         raise HTTPException(status_code=401, detail="not authenticated")
     return user
 
 
-def _set_session_cookie(response: Response, token: str):
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=token,
-        httponly=True,  # JavaScript can't read it, so XSS can't steal it
-        samesite="lax",  # not sent on cross-site POSTs, which blocks CSRF
-        secure=settings.cookie_secure,  # https only when deployed
-        max_age=7 * 24 * 60 * 60,
-    )
-
-
 @router.post("/register", status_code=201)
-def register(body: RegisterRequest, response: Response):
+def register(body: RegisterRequest):
     with get_db() as conn:
         try:
-            token = service.register(conn, body.username, body.password)
+            session_id = service.register(conn, body.username, body.password)
         except service.UsernameTakenError:
             raise HTTPException(status_code=409, detail="username already taken")
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
-    _set_session_cookie(response, token)
-    return {"username": body.username}
+        token = service.access_token(conn, session_id)
+    return {"username": body.username, "token": token}
 
 
 @router.post("/login")
-def login(body: LoginRequest, response: Response):
+def login(body: LoginRequest):
     with get_db() as conn:
         try:
-            token = service.authenticate(conn, body.username, body.password)
+            session_id = service.authenticate(conn, body.username, body.password)
         except service.InvalidCredentialsError:
             raise HTTPException(status_code=401, detail="invalid username or password")
-    _set_session_cookie(response, token)
-    return {"username": body.username}
+        token = service.access_token(conn, session_id)
+    return {"username": body.username, "token": token}
 
 
 @router.post("/logout")
-def logout(response: Response, session_id: Optional[str] = Cookie(default=None)):
-    if session_id:
-        with get_db() as conn:
-            service.logout(conn, session_id)
-    response.delete_cookie(
-        SESSION_COOKIE, httponly=True, samesite="lax", secure=settings.cookie_secure
-    )
+def logout(authorization: Optional[str] = Header(default=None)):
+    with get_db() as conn:
+        service.logout_token(conn, bearer_token(authorization))
     return {"status": "logged out"}
 
 

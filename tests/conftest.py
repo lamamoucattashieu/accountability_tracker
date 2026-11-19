@@ -4,6 +4,15 @@ from app.config import settings
 from app.db import get_connection, init_db
 
 
+TEST_SECRET = "test-only-token-secret"
+
+
+@pytest.fixture(autouse=True)
+def secrets(monkeypatch):
+    """Every secret a service needs, with test-only values."""
+    monkeypatch.setenv("AUTH_TOKEN_SECRET", TEST_SECRET)
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     """Point DATA_DIR at a temporary folder and create the schema, like startup does."""

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.auth import repository
+from app.auth import repository, tokens
 from app.auth.security import (
     hash_password,
     new_invite_code,
@@ -76,6 +76,31 @@ def get_user_from_session(conn, session_token):
         repository.delete_session(conn, session_token)
         return None
     return repository.get_user_by_id(conn, session["user_id"])
+
+
+def access_token(conn, session_id: str) -> str:
+    """The signed token the browser sends; it expires with its session."""
+    session = repository.get_session(conn, session_id)
+    return tokens.issue(session["user_id"], session_id, datetime.fromisoformat(session["expires_at"]))
+
+
+def get_user_from_token(conn, token):
+    """The logged-in user, or None: the signature, the expiry and the session must all hold.
+
+    Checking the session too means logout (which deletes it) takes effect here
+    at once. Points checks only the signature and expiry, so there a token
+    stays usable until it expires: the accepted cost of not asking Checkins.
+    """
+    claims = tokens.verify(token)
+    if claims is None:
+        return None
+    return get_user_from_session(conn, claims["sid"])
+
+
+def logout_token(conn, token) -> None:
+    claims = tokens.verify(token)
+    if claims is not None:
+        logout(conn, claims["sid"])
 
 
 def create_group(conn, user_id: int, name: str):

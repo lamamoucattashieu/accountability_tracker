@@ -3,7 +3,7 @@
 // streaks, settlement, vote thresholds) stay on the server: views only show
 // what the API returns.
 
-import { ApiError, auth, checkins, groups, onUnauthorized, points } from "./api.js";
+import { ApiError, auth, checkins, groups, onUnauthorized, photoUrl, points } from "./api.js";
 
 const state = {
   me: null, // {id, username} of the logged-in user
@@ -598,6 +598,20 @@ function renderFeed(root) {
   loadFeed(feed);
 }
 
+/** An <img> for a members-only photo: filled in once photoUrl has fetched it with the token. */
+function protectedPhoto(path, alt) {
+  const img = el("img", { alt });
+  photoUrl(path)
+    .then((url) => {
+      img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+      img.src = url;
+    })
+    .catch(() => {
+      img.alt = `${alt} (couldn't load the photo)`;
+    });
+  return img;
+}
+
 function loadFeed(feed) {
   const filter = FEED_FILTERS[state.feedFilter];
   loadInto(feed, async () => (await checkins.feed(state.group.id)).filter(filter.keep), (container, items) => {
@@ -617,7 +631,7 @@ function postCard(item, feed) {
       ),
     ),
     el("div", { class: "photo-frame" },
-      el("img", { src: item.photo_url, alt: `${nameOf(item.user_id)}'s proof for ${item.goal_title}`, loading: "lazy" }),
+      protectedPhoto(item.photo_url, `${nameOf(item.user_id)}'s proof for ${item.goal_title}`),
       el("span", { class: `sticker ${sticker.kind}`, text: sticker.text }),
       item.caption ? el("span", { class: "caption-bubble", text: item.caption }) : null,
     ),
@@ -960,7 +974,7 @@ function assignmentItem(assignment) {
       badge(status.text, status.kind),
     ),
     assignment.proof_url
-      ? el("img", { src: assignment.proof_url, alt: `${nameOf(assignment.user_id)}'s forfeit proof`, loading: "lazy" })
+      ? protectedPhoto(assignment.proof_url, `${nameOf(assignment.user_id)}'s forfeit proof`)
       : null,
     upload,
   );

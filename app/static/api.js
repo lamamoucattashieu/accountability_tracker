@@ -2,9 +2,12 @@
 // codes. Views call intention-revealing functions and get data back, or an
 // ApiError with a message they can show as-is.
 //
-// Authentication is the httponly session cookie set by /auth/login. JavaScript
-// can't read it (so XSS can't steal it); same-origin requests send it
-// automatically. All URLs are relative, so this works wherever the app is hosted.
+// Authentication is a signed token from /auth/login, sent as
+// "Authorization: Bearer <token>" on every request. It isn't a cookie, because
+// the UI and the services are on different sites, where browsers block cookies.
+// The token lives in localStorage, so JavaScript can read it: never putting user
+// content into the page as HTML (views use textContent only) is what keeps an
+// injected script from stealing it.
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -17,6 +20,33 @@ export class ApiError extends Error {
 const PATHS = {
   login: "/auth/login",
 };
+
+const TOKEN_KEY = "lockin.token";
+
+// localStorage can be missing or blocked (private windows, strict settings):
+// the app then still works, the login just doesn't survive a reload.
+let memoryToken = null;
+
+function readToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || memoryToken;
+  } catch {
+    return memoryToken;
+  }
+}
+
+function saveToken(token) {
+  memoryToken = token;
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+    }
+  } catch {
+    // memoryToken still holds it for this page
+  }
+}
 
 let handleUnauthorized = () => {};
 
@@ -36,8 +66,13 @@ function messageFrom(body, status) {
   return `Request failed (${status})`;
 }
 
+function authHeaders() {
+  const token = readToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function request(method, path, { json, form } = {}) {
-  const options = { method, credentials: "same-origin", headers: {} };
+  const options = { method, credentials: "omit", headers: authHeaders() };
   if (json !== undefined) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(json);
@@ -58,6 +93,7 @@ async function request(method, path, { json, form } = {}) {
   if (!response.ok) {
     // A wrong password is also a 401, but that's an error to show, not a logout.
     if (response.status === 401 && path !== PATHS.login) {
+      saveToken(null);
       handleUnauthorized();
     }
     throw new ApiError(response.status, messageFrom(body, response.status));
@@ -78,13 +114,36 @@ function photoForm(photo, extra = {}) {
 
 // --- Auth & groups (shared, not a domain) ---
 
+/**
+ * A photo behind the membership check, as a local object URL for an <img>.
+ * An <img src> can't send the Authorization header, so the photo is fetched
+ * here and handed to the page as a blob.
+ */
+export async function photoUrl(path) {
+  const response = await fetch(path, { credentials: "omit", headers: authHeaders() });
+  if (!response.ok) {
+    throw new ApiError(response.status, `Photo unavailable (${response.status})`);
+  }
+  return URL.createObjectURL(await response.blob());
+}
+
+async function startSession(path, username, password) {
+  const body = await request("POST", path, { json: { username, password } });
+  saveToken(body.token);
+  return body;
+}
+
 export const auth = {
   me: () => request("GET", "/auth/me"),
-  register: (username, password) =>
-    request("POST", "/auth/register", { json: { username, password } }),
-  login: (username, password) =>
-    request("POST", PATHS.login, { json: { username, password } }),
-  logout: () => request("POST", "/auth/logout"),
+  register: (username, password) => startSession("/auth/register", username, password),
+  login: (username, password) => startSession(PATHS.login, username, password),
+  logout: async () => {
+    try {
+      await request("POST", "/auth/logout");
+    } finally {
+      saveToken(null); // logged out here even if the server couldn't be reached
+    }
+  },
 };
 
 export const groups = {

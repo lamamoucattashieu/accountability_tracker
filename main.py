@@ -18,6 +18,7 @@ STATIC_DIR = Path(__file__).parent / "app" / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.check_secrets()
     init_db()
     yield
 
