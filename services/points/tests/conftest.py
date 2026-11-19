@@ -6,12 +6,14 @@ from app.points import group_directory
 from tests import factories
 
 TEST_SECRET = "test-only-token-secret"
+TEST_INTERNAL_KEY = "test-only-internal-key"
 
 
 @pytest.fixture(autouse=True)
 def secrets(monkeypatch):
     """Every secret a service needs, with test-only values."""
     monkeypatch.setenv("AUTH_TOKEN_SECRET", TEST_SECRET)
+    monkeypatch.setenv("INTERNAL_API_KEY", TEST_INTERNAL_KEY)
 
 
 @pytest.fixture(autouse=True)

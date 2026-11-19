@@ -263,6 +263,27 @@ def create_checkin(conn, user_id: int, goal_id: int, photo_file, caption):
     return repository.get_checkin(conn, checkin_id)
 
 
+def group_for_points(conn, group_id: int):
+    """What Points may know about a group, or None if it doesn't exist.
+
+    Ids and timestamps only (no usernames): the UI adds names from
+    /groups/{id}/members. pending_points_sync tells Points not to settle while
+    some of this group's points changes are still queued here.
+    """
+    created_at = auth_service.group_created_at(conn, group_id)
+    if created_at is None:
+        return None
+    return {
+        "id": group_id,
+        "created_at": created_at,
+        "members": [
+            {"id": member["id"], "joined_at": member["joined_at"]}
+            for member in auth_service.list_members(conn, group_id)
+        ],
+        "pending_points_sync": repository.group_has_pending_outbox(conn, group_id),
+    }
+
+
 def deliver_points_changes(conn) -> None:
     """Send queued points changes to Points. Runs after a request's own commit."""
     outbox.deliver_pending(conn)
