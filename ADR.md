@@ -10,7 +10,7 @@ Consequences: I work in the language I know best and keep the dependency list sh
 
 ## 2. Scoping the two feature domains to be independently modularizable
 Date: 2026-09-29
-Status: Decided
+Status: Superseded by 6
 Context: The app runs as one process now but should be splittable into services later. Goals & Check-ins and Points & Forfeits both need user/group data and photos, which would easily tangle them together through shared tables.
 Decision: Each domain owns its tables and exposes a service layer; other code may call a domain's service functions but never query its tables. Both domains ask auth only through auth.service functions (e.g. is_member, list_members), check-ins notifies Points only through points.service.record_completion/revoke_completion, and photo handling lives in shared/uploads.py so neither domain imports the other for it.
 Alternatives considered: Letting app/checkins/repository.py query group_members directly (simpler, one JOIN). Rejected because it couples Check-ins to auth's table layout, so a service split would mean rewriting SQL instead of replacing one function with an HTTP call. A separate SQLite file per domain was also rejected: the spec requires one SQLite file at one path, and it would lose cross-domain transactions immediately rather than at split time.
@@ -158,3 +158,11 @@ Context: A forfeit loser uploads photo proof, and check-ins already let the grou
 Decision: Proof is accepted as uploaded: only the assigned member can upload it, once, and every group member can see it, but nobody can vote it down.
 Alternatives considered: Reusing the check-in rejection vote for proof, rejected because Points would either depend on check-ins' voting code or duplicate it, and a second 48h window would delay when a forfeit counts as done. A point penalty for missing proof, rejected so that scoring stays independent of forfeits.
 Consequences: A loser could upload an unrelated photo; the group sees it and deals with it socially, as with goal farming in Phase 2a. Proof voting can be added later as a new table and endpoint inside Points without changing existing tables.
+
+## 6. Splitting the monolith into a checkins service and a points service
+Date: 2026-11-19
+Status: Decided
+Context: A2 requires one service per domain, each with its own database, talking only over HTTP. The A1 seam (ADR-2) assumed shared auth and one SQLite transaction covering a check-in and its points.
+Decision: The seam stayed where ADR-2 put it, and Checkins still calls Points. Auth moved into Checkins because it checks membership on nearly every request. Points changes go through a transactional outbox delivered to idempotent endpoints. Points reads membership through one call per request, cached as a snapshot, and verifies signed tokens itself.
+Alternatives considered: Points validating each request with Checkins. Rejected because Points could then serve nothing while Checkins is down. Auth inside Points was rejected because most Checkins requests would then cross the seam.
+Consequences: Each user-visible flow makes at most one call across the seam. Either service keeps serving its own domain when the other is down. The leaderboard is eventually consistent, and a logged-out token stays valid in Points until it expires.
