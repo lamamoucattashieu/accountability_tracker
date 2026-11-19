@@ -24,9 +24,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.auth import repository as auth_repository
 from app.auth import service as auth_service
-from app.checkins import outbox
+from app.checkins import outbox, points_client
 from app.checkins import repository as checkins_repository
 from app.checkins import service as checkins_service
+from app.config import settings
 from app.db import get_connection, init_db
 from app.shared.timeutils import week_begins_at, week_start_for
 
@@ -184,6 +185,10 @@ def seed(now: datetime) -> dict:
 
 
 def main():
+    settings.check_secrets()
+    points_client.set_client(points_client.HttpPointsClient(
+        settings.points_url, settings.points_timeout_s, settings.internal_api_key,
+    ))
     summary = seed(datetime.now(timezone.utc))
     print("Demo crew 'gym gremlins' created:", ", ".join(f"{k} {v}" for k, v in summary.items()))
     print("Now run the Points half: python seed_demo.py in services/points")
