@@ -2,34 +2,16 @@
 
 import pytest
 
-from app.points import group_directory, repository, service
-from app.points.group_directory import CheckinsUnavailable, LocalGroupDirectory
+from app.points import repository, service
 from tests.points.conftest import at, complete
 
 SETTLES = at("2026-10-01T00:00:00+00:00")  # week of 2026-09-21 settles from here (Wed + 48h)
 
 
-class FlakyDirectory:
-    """The real directory, but it can be switched off or report undelivered points."""
-
-    def __init__(self):
-        self.down = False
-        self.pending = False
-
-    def fetch_group(self, group_id):
-        if self.down:
-            raise CheckinsUnavailable("checkins is down")
-        data = LocalGroupDirectory().fetch_group(group_id)
-        if data is not None:
-            data["pending_points_sync"] = self.pending
-        return data
-
-
 @pytest.fixture
-def directory(monkeypatch):
-    flaky = FlakyDirectory()
-    monkeypatch.setattr(group_directory, "_directory", flaky)
-    return flaky
+def directory(checkins):
+    """The fake Checkins from tests/conftest.py, which can be switched off."""
+    return checkins
 
 
 @pytest.fixture
@@ -71,10 +53,10 @@ def test_no_settlement_from_a_stale_snapshot(call, conn, people, group, forfeit,
 
 
 def test_no_settlement_while_checkins_has_undelivered_points(call, conn, people, group, forfeit, directory):
-    directory.pending = True
+    directory.pending.add(group)
     call(service.list_settlements, people["ana"], group, SETTLES)
     assert repository.settled_week_starts(conn, group) == set()
-    directory.pending = False
+    directory.pending.discard(group)
     call(service.list_settlements, people["ana"], group, SETTLES)
     assert "2026-09-21" in repository.settled_week_starts(conn, group)
 

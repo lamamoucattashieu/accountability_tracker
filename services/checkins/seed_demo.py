@@ -1,11 +1,19 @@
-"""Fill an empty DATA_DIR with a demo crew, so every feature has something to show.
+"""Checkins half of the demo: fill an empty DATA_DIR with a demo crew.
 
-    python seed_demo.py      # then: python main.py, and log in as maya / lockin-demo
+With both services running (Points needs an empty DATA_DIR too):
+    python seed_demo.py                       # here, in services/checkins
+    python seed_demo.py                       # then in services/points
+and log in as maya / lockin-demo.
 
-Everything goes through the real service functions, so every rule holds (vote
-thresholds, the weekly cap, streaks, settlement, who may set the forfeit); only
-timestamps are moved back afterwards to create past weeks. It refuses to run on a
-database that already has users, so demo data never mixes with real data.
+This half creates the people, the crew, goals, backdated check-ins (one voted
+down), comments and nudges, then delivers every queued points change to Points
+through the outbox, with the backdated times. The Points half then adds the
+forfeits, settles the finished weeks and adds proof. Seed data moves with its
+table: each half writes only its own service's database.
+
+Everything goes through the real service functions, so every rule holds; only
+timestamps are moved back to create past weeks. It refuses to run on a database
+that already has users, so demo data never mixes with real data.
 """
 
 import io
@@ -20,8 +28,6 @@ from app.checkins import outbox
 from app.checkins import repository as checkins_repository
 from app.checkins import service as checkins_service
 from app.db import get_connection, init_db
-from app.points import repository as points_repository
-from app.points import service as points_service
 from app.shared.timeutils import week_begins_at, week_start_for
 
 PASSWORD = "lockin-demo"
@@ -102,14 +108,6 @@ def seed(now: datetime) -> dict:
     day = timedelta(days=1)
     hour = timedelta(hours=1)
 
-    # --- forfeits, each set before the week it applies to -------------------------
-    for text, set_at in [
-        ("loser buys the whole crew coffee", three_ago - 6 * hour),
-        ("10 push-ups on video in the group chat", two_ago - day),
-        ("a 30-second dance video, no filters", last_week - day),
-    ]:
-        points_repository.insert_forfeit(conn, group["id"], text, ids["maya"], iso(set_at))
-
     # --- two weeks ago: sam scores nothing and loses ------------------------------
     for offset in (0, 2, 4):
         post("maya", "maya_gym", two_ago + offset * day + 8 * hour, "LEG DAY", "purple")
@@ -157,26 +155,11 @@ def seed(now: datetime) -> dict:
         checkins_service.add_comment(conn, ids["maya"], maya_post, "receipts attached")
     conn.commit()
 
-    # --- deliver the queued points, then settle finished weeks and add proof -------
+    # --- deliver every queued points change to Points, with the backdated times ----
     # The whole backlog at once: a request sends only OUTBOX_BATCH rows, the seed sends all.
     outbox.deliver_pending(conn, limit=SEED_OUTBOX_LIMIT)
     if checkins_repository.pending_outbox(conn, 1):
         raise SystemExit("Points didn't take every demo check-in. Is the Points service running?")
-    points_service.ensure_settled(conn, group["id"], now)
-    sam_loss = conn.execute(
-        """SELECT forfeit_assignments.id FROM forfeit_assignments
-           JOIN settlements ON settlements.id = forfeit_assignments.settlement_id
-           WHERE settlements.group_id = ? AND forfeit_assignments.user_id = ?
-           ORDER BY settlements.week_start LIMIT 1""",
-        (group["id"], ids["sam"]),
-    ).fetchone()
-    if sam_loss:
-        points_service.submit_proof(conn, ids["sam"], sam_loss["id"], photo("10 PUSH-UPS", "yellow"), now)
-        conn.commit()
-
-    # --- next week's forfeit, set by last week's winner (the real rule) ------------
-    points_service.set_forfeit(conn, ids["maya"], group["id"], "last place renames the group chat for a week", now)
-    conn.commit()
 
     # --- nudges: maya receives one, sam receives one -------------------------------
     nudges = 0
@@ -193,8 +176,7 @@ def seed(now: datetime) -> dict:
         "checkins": conn.execute("SELECT COUNT(*) FROM checkins").fetchone()[0],
         "rejected": conn.execute("SELECT COUNT(*) FROM checkins WHERE status = 'rejected'").fetchone()[0],
         "comments": conn.execute("SELECT COUNT(*) FROM checkin_comments").fetchone()[0],
-        "settled_weeks": conn.execute("SELECT COUNT(*) FROM settlements").fetchone()[0],
-        "forfeit_losers": conn.execute("SELECT COUNT(*) FROM forfeit_assignments").fetchone()[0],
+        "points_delivered": conn.execute("SELECT COUNT(*) FROM points_outbox WHERE sent_at IS NOT NULL").fetchone()[0],
         "nudges": nudges,
     }
     conn.close()
@@ -204,8 +186,7 @@ def seed(now: datetime) -> dict:
 def main():
     summary = seed(datetime.now(timezone.utc))
     print("Demo crew 'gym gremlins' created:", ", ".join(f"{k} {v}" for k, v in summary.items()))
-    print(f"Now run: python main.py   and log in as maya / {PASSWORD}")
-    print(f"(leo, zoe and sam use the same password; open a private window to see another view)")
+    print("Now run the Points half: python seed_demo.py in services/points")
 
 
 if __name__ == "__main__":

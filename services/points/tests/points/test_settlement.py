@@ -8,7 +8,7 @@ import pytest
 from app.config import settings
 from app.db import get_connection
 from app.points import repository, service
-from tests.factories import make_group, make_user, username_of
+from tests.factories import add_member, make_group, make_user, username_of
 from tests.points.conftest import backdate_group, backdate_join, complete, utc
 
 WEEK = date(2026, 9, 28)
@@ -85,10 +85,7 @@ def test_member_with_zero_checkins_can_lose(call, conn, people, group, forfeit):
 
 def test_member_who_joined_mid_week_cannot_lose_it(call, conn, people, group, forfeit):
     dave = make_user(conn, "dave")
-    conn.execute(
-        "INSERT INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, ?)",
-        (group, dave, "2026-09-30T08:00:00+00:00"),
-    )
+    add_member(conn, group, dave, "2026-09-30T08:00:00+00:00")
     score(conn, people["ana"], group, 2)
     score(conn, people["ben"], group, 1)
     score(conn, people["cy"], group, 1)
@@ -276,7 +273,9 @@ def test_busy_timeout_becomes_settlement_busy_not_a_crash(people, group, forfeit
 
 
 def test_settlement_refuses_to_start_inside_an_open_transaction(conn, people, group):
-    conn.execute("UPDATE groups SET name = 'renamed' WHERE id = ?", (group,))  # uncommitted work
+    conn.execute(  # uncommitted work
+        "INSERT INTO forfeits (group_id, text, set_by, created_at) VALUES (?, 'x', 1, '2026-09-20')", (group,)
+    )
     with pytest.raises(RuntimeError):
         service.ensure_settled(conn, group, SETTLES)
 

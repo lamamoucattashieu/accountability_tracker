@@ -4,7 +4,6 @@ import pytest
 
 from app.checkins import repository, service
 from app.db import get_db
-from app.points import service as points_service
 from tests.checkins.conftest import queued_revokes
 from tests.factories import make_group, make_user
 from tests.images import image_file
@@ -181,19 +180,3 @@ def test_rejection_is_saved_when_points_is_down(conn, bob, carol, checkin, point
     assert status_of(conn, checkin["id"]) == "rejected"
     assert service.is_points_pending(conn, checkin["id"]) is True
 
-
-def test_rejection_by_vote_removes_the_points_from_the_leaderboard(
-    conn, alice, bob, carol, four_person_group, checkin
-):
-    """End to end through the real seam: the outbox delivers to the real Points code."""
-    def alice_points():
-        posted = datetime.fromisoformat(checkin["created_at"])
-        conn.commit()  # like a new request: settlement never starts inside an open transaction
-        service.deliver_points_changes(conn)  # what the route does after each check-in and vote
-        board = points_service.get_leaderboard(conn, bob, four_person_group, posted.date(), posted)
-        return next(e["points"] for e in board["entries"] if e["user_id"] == alice)
-
-    assert alice_points() == 1
-    service.cast_rejection_vote(conn, bob, checkin["id"])
-    service.cast_rejection_vote(conn, carol, checkin["id"])
-    assert alice_points() == 0

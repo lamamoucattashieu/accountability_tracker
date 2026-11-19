@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.points import service
-from tests.factories import make_group, make_user
+from tests.factories import backdate_group, backdate_join, make_group, make_user  # noqa: F401 (re-exported)
 
 # Sunday of the week starting 2026-09-14: everyone is eligible from the week of 2026-09-21.
 GROUP_CREATED = "2026-09-20T09:00:00+00:00"
@@ -37,17 +37,6 @@ def group(conn, people):
         backdate_join(conn, group_id, user_id, GROUP_CREATED)
     conn.commit()
     return group_id
-
-
-def backdate_group(conn, group_id, created_at):
-    conn.execute("UPDATE groups SET created_at = ? WHERE id = ?", (created_at, group_id))
-
-
-def backdate_join(conn, group_id, user_id, joined_at):
-    conn.execute(
-        "UPDATE group_members SET joined_at = ? WHERE group_id = ? AND user_id = ?",
-        (joined_at, group_id, user_id),
-    )
 
 
 def at(text):

@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from app.auth import repository as auth_repository
 from app.checkins import repository as checkins_repository
 from app.config import settings
-from app.points import repository as points_repository
 
 
 def get_connection():
@@ -30,4 +29,3 @@ def init_db():
     with get_db() as conn:
         auth_repository.create_tables(conn)
         checkins_repository.create_tables(conn)
-        points_repository.create_tables(conn)

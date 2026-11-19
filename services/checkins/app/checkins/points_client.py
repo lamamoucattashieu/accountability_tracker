@@ -22,29 +22,17 @@ class PointsClient(Protocol):
     def revoke(self, checkin_id: int, revoked_at: str) -> None: ...
 
 
-class LocalPointsClient:
-    """Adapter for the monolith: calls the Points service functions in-process.
-
-    Each call uses its own connection and commits on its own, like a request to
-    another service would. Replaced by an HTTP adapter after the split.
-    """
+class UnconfiguredPointsClient:
+    """Used until main.py plugs in the real adapter: every change just stays queued."""
 
     def record(self, completion: dict) -> None:
-        from app.db import get_db
-        from app.points import service as points_service
-
-        with get_db() as conn:
-            points_service.record_completion(conn, **completion)
+        raise PointsUnavailable("no Points client configured")
 
     def revoke(self, checkin_id: int, revoked_at: str) -> None:
-        from app.db import get_db
-        from app.points import service as points_service
-
-        with get_db() as conn:
-            points_service.revoke_completion(conn, checkin_id, revoked_at)
+        raise PointsUnavailable("no Points client configured")
 
 
-_client: PointsClient = LocalPointsClient()
+_client: PointsClient = UnconfiguredPointsClient()
 
 
 def set_client(client: PointsClient) -> None:
