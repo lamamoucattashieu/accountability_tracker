@@ -3,7 +3,7 @@
 // streaks, settlement, vote thresholds) stay on the server: views only show
 // what the API returns.
 
-import { ApiError, auth, checkins, groups, onUnauthorized, photoUrl, points } from "./api.js";
+import { ApiError, auth, checkins, groups, onStartingUp, onUnauthorized, photoUrl, points } from "./api.js";
 
 const state = {
   me: null, // {id, username} of the logged-in user
@@ -405,6 +405,10 @@ function openGroup(group) {
   show("group");
 }
 
+// Names and nudges come from the check-ins service. If it can't be reached, the
+// tabs still open (the scoreboard keeps working), with "member" for names.
+const isServiceDown = (error) => error instanceof ApiError && (error.kind === "unavailable" || error.kind === "starting");
+
 function renderGroup(root) {
   root.append(notice("Loading your crew…"));
   Promise.all([groups.members(state.group.id), checkins.nudgesForMe(state.group.id)])
@@ -416,7 +420,16 @@ function renderGroup(root) {
       root.replaceChildren();
       groupTabs[state.tab].render(root);
     })
-    .catch((error) => root.replaceChildren(notice(errorText(error), "error")));
+    .catch((error) => {
+      if (!isServiceDown(error)) {
+        root.replaceChildren(notice(errorText(error), "error"));
+        return;
+      }
+      state.names = new Map();
+      state.nudgesForMe = [];
+      root.replaceChildren(notice(errorText(error), "error"));
+      groupTabs[state.tab].render(root);
+    });
 }
 
 // --- Home: post proof and your goals (Goals & Check-ins) ---------------------
@@ -566,6 +579,10 @@ function goalCard(goal, index) {
 
 // --- Feed: everyone's check-ins and reject votes (Goals & Check-ins) ----------
 
+// The check-in is saved, but the scoreboard hasn't heard about it yet (it was
+// unreachable). The check-ins service sends it again on a later request.
+const POINTS_PENDING_TEXT = "points pending: scoreboard offline";
+
 const CHECKIN_STICKER = {
   accepted: { text: "verified sweat", kind: "" },
   rejected: { text: "rejected by the crew", kind: "sticker-danger" },
@@ -599,9 +616,9 @@ function renderFeed(root) {
 }
 
 /** An <img> for a members-only photo: filled in once photoUrl has fetched it with the token. */
-function protectedPhoto(path, alt) {
+function protectedPhoto(service, path, alt) {
   const img = el("img", { alt });
-  photoUrl(path)
+  photoUrl(service, path)
     .then((url) => {
       img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
       img.src = url;
@@ -631,8 +648,9 @@ function postCard(item, feed) {
       ),
     ),
     el("div", { class: "photo-frame" },
-      protectedPhoto(item.photo_url, `${nameOf(item.user_id)}'s proof for ${item.goal_title}`),
+      protectedPhoto("checkins", item.photo_url, `${nameOf(item.user_id)}'s proof for ${item.goal_title}`),
       el("span", { class: `sticker ${sticker.kind}`, text: sticker.text }),
+      item.points_pending ? el("span", { class: "badge badge-info points-pending", text: POINTS_PENDING_TEXT }) : null,
       item.caption ? el("span", { class: "caption-bubble", text: item.caption }) : null,
     ),
     el("div", { class: "row" },
@@ -696,7 +714,8 @@ function commentsSection(item) {
 function voteControl(item, feed) {
   const myVote = state.votes.get(item.id);
   if (myVote) {
-    return el("span", { class: "badge badge-info", text: `you voted · ${myVote.reject_votes}/${myVote.votes_needed} to reject` });
+    const pending = myVote.points_pending ? " · the scoreboard will update when it's back" : "";
+    return el("span", { class: "badge badge-info", text: `you voted · ${myVote.reject_votes}/${myVote.votes_needed} to reject${pending}` });
   }
   if (item.user_id === state.me.id || item.status === "rejected") {
     return el("span");
@@ -760,9 +779,18 @@ function renderCrew(root) {
   const peopleData = () => Promise.all([points.leaderboard(state.group.id), checkins.progress(state.group.id)]);
   loadInto(people, peopleData, (container, [board, progress]) => {
     const progressById = new Map(progress.map((row) => [row.user_id, row]));
-    container.append(el("ul", { class: "list" },
+    container.append(staleNotice(board) || "", el("ul", { class: "list" },
       ...board.entries.map((entry) => memberCard(entry, progressById.get(entry.user_id)))));
   }, "");
+}
+
+// Points answered from its last copy of the crew, because the check-ins
+// service didn't answer. Reads still work; changes wait until it's back.
+const STALE_MEMBERSHIP_TEXT = "Crew list may be out of date: goals & check-ins isn't answering, "
+  + "so the scoreboard is using its last copy. Changes are paused until it's back.";
+
+function staleNotice(answer) {
+  return answer.membership_stale ? notice(STALE_MEMBERSHIP_TEXT, "info") : null;
 }
 
 function renderForfeitCard(container, forfeits) {
@@ -779,7 +807,7 @@ function renderForfeitCard(container, forfeits) {
       refreshGroup();
     },
   }) : el("p", { class: "muted", text: `Only last week's #1 sets the forfeit: ${setters}.` });
-  container.append(el("section", { class: "card card-yellow" },
+  container.append(staleNotice(forfeits) || "", el("section", { class: "card card-yellow" },
     el("div", { class: "split" },
       el("div", { class: "section" },
         eyebrow(`This week's forfeit · locked since ${formatDay(forfeits.this_week.week_start)}`),
@@ -888,6 +916,7 @@ function renderStats(root) {
     weekPill.textContent = `week of ${formatDay(board.week_start)}`;
     const mine = board.entries.find((entry) => entry.user_id === state.me.id);
     container.append(
+      staleNotice(board) || "",
       el("div", { class: "stat-grid" },
         statCard("lime", "stats", "Points this week", mine.points, "pts", "Straight from the scoreboard."),
         statCard("purple", "flame", "Streak bonus", `+${mine.streak_bonus}`, "pts",
@@ -974,7 +1003,7 @@ function assignmentItem(assignment) {
       badge(status.text, status.kind),
     ),
     assignment.proof_url
-      ? protectedPhoto(assignment.proof_url, `${nameOf(assignment.user_id)}'s forfeit proof`)
+      ? protectedPhoto("points", assignment.proof_url, `${nameOf(assignment.user_id)}'s forfeit proof`)
       : null,
     upload,
   );
@@ -987,9 +1016,19 @@ onUnauthorized(() => {
   show("auth");
 });
 
+// While a service wakes from a cold start, api.js retries; say so instead of hanging silently.
+const startupBanner = document.getElementById("startup-banner");
+onStartingUp((starting) => {
+  startupBanner.hidden = !starting;
+});
+
 startSession().catch((error) => {
   // A 401 already showed the login view through onUnauthorized.
   if (!(error instanceof ApiError && error.status === 401)) {
     show("auth");
+  }
+  // Logging in needs the check-ins service: say so, instead of looking logged out.
+  if (isServiceDown(error)) {
+    viewRoot.prepend(notice(errorText(error), "error"));
   }
 });

@@ -610,6 +610,21 @@ input[type="file"]::file-selector-button {
   background: #fde3dc;
 }
 
+/* Shown while a service wakes from a cold start (api.js retries meanwhile). */
+.startup-banner {
+  max-width: var(--max-width);
+  margin: var(--space-3) auto 0;
+  text-align: center;
+}
+
+/* A check-in whose points haven't reached the scoreboard yet. */
+.points-pending {
+  position: absolute;
+  top: var(--space-5);
+  right: var(--space-5);
+  max-width: 60%;
+}
+
 /* --- lists, avatars, people -------------------------------------------------- */
 
 .list {

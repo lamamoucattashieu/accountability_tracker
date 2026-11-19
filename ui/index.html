@@ -4,8 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>lockin.</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <script type="module" src="/static/app.js"></script>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Service URLs first: api.js reads them when it loads. -->
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -16,6 +18,9 @@
     <nav id="top-nav" class="top-nav" aria-label="Sections"></nav>
     <div id="user-bar" class="user-bar"></div>
   </header>
+  <p id="startup-banner" class="notice notice-info startup-banner" role="status" hidden>
+    Starting up… the app was asleep and is waking, this can take up to a minute.
+  </p>
   <main id="view" class="view" aria-live="polite">
     <p class="notice">Loading…</p>
   </main>
