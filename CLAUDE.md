@@ -113,13 +113,15 @@ driven by one of these, name it in one line (in the plan or the walkthrough, not
   moved in from the A1 shared `app/auth/`. Chosen because Checkins checks membership on almost
   every request; putting auth in Points would make most Checkins requests cross the seam.
 - Owns tables: `users`, `sessions`, `groups`, `group_members`, `goals`, `checkins`,
-  `checkin_votes`, `checkin_comments`, `nudges`
+  `checkin_votes`, `checkin_comments`, `nudges`, and `points_outbox` (points changes not yet
+  delivered to Points)
 - Check-in photos are stored in this service's database (see Photos below)
 
 ### Service 2: Points & Forfeits (`services/points/`)
 - Weekly scoring, leaderboard, forfeits, lazy settlement, forfeit proof (as in A1). The
   `UNIQUE (group_id, week_start)` settlement guarantee carries over to SQL Server.
-- Owns tables: `point_events`, `forfeits`, `settlements`, `forfeit_assignments`
+- Owns tables: `point_events`, `forfeits`, `settlements`, `forfeit_assignments`, and
+  `group_snapshots` (its last copy of each group from Checkins)
 - Forfeit proof photos are stored in this service's database
 - Gets members, `joined_at` and `group_created_at` from Checkins over HTTP, since it no longer
   shares a process with auth
@@ -173,10 +175,6 @@ not found, 409 conflicts with current state (duplicate vote, already settled), 4
 routes translate them. No bare 400s or 500s for expected cases.
 
 ### Still open (ask me before building)
-- **How Points authenticates the browser's requests.** The session lives in Checkins, and the UI
-  is on a different origin from both services, so cookie and CORS settings change. Options include
-  Points asking Checkins to validate the session, or a signed token. Needed before the split.
-- Service names in compose and Azure (assumed `checkins` and `points` here)
 - Migration approach (numbered SQL files with our own runner, or Alembic) and infrastructure
   definition (Azure CLI in the workflow, or Bicep/Terraform)
 - How existing A1 SQLite data reaches the new databases, if at all
@@ -195,6 +193,29 @@ came from. Never record a decision I didn't make.
 | Direction of the server-side cross-seam flow | Before Phase 1 | Checkins calls Points (`record_completion` / `revoke_completion` over HTTP), keeping ADR-2's direction |
 | Behaviour when Points is down | Before Phase 1 | Save the check-in or rejection, flag it as not synced, retry lazily on later Checkins requests (safe because the calls are idempotent) |
 | Where photos are stored | Before Phase 1 | As `VARBINARY` in the database of the service that owns them |
+| How Points knows who is calling | Phase 1 | A token signed with HMAC-SHA256 (`AUTH_TOKEN_SECRET`, standard library) holding user id, session id and expiry, issued by Checkins at login/register and verified locally by both; Checkins also checks the session row, so logout is immediate there and only at expiry in Points |
+| Where the browser keeps the token | Phase 1 | `localStorage`, 7 days (the A1 login lifetime), sent as `Authorization: Bearer`; photos fetched as blobs. XSS defence is the `textContent`-only rule; no CSRF, the browser never adds the header |
+| Protecting `/internal/...` endpoints | Phase 1 | A separate shared secret `INTERNAL_API_KEY` in an `X-Internal-Key` header, compared in constant time |
+| Membership in Points | Phase 1 | One `GET /internal/groups/{id}` per request, cached in `group_snapshots`. Checkins down: reads served from the snapshot marked `membership_stale`, changes 503, no snapshot at all 503 |
+| Settlement and incomplete data | Phase 1 | Never settle from a stale snapshot, nor while Checkins reports `pending_points_sync` for the group |
+| "Not yet synced" store | Phase 1 | A `points_outbox` table written in the same local transaction, with the payload as it was at write time |
+| When the outbox retries | Phase 1 | After each check-in or vote and on feed load, at most `OUTBOX_BATCH` (20) rows, oldest first, stopping at the first failure |
+| Outbox row Points rejects (4xx) | Phase 1 | Marked failed, logged, skipped. Timeouts, 5xx and a refused key stay pending |
+| HTTP client between services | Phase 1 | `httpx==0.28.1` in both services (also gives `TestClient` and `MockTransport`, so ADR-4 changes) |
+| Timeouts | Phase 1 | 2 s both ways, named constants overridable by `POINTS_TIMEOUT_S` / `CHECKINS_TIMEOUT_S` |
+| Code both services need | Phase 1 | Copied into each service (`timeutils`, `uploads`, `tokens`, `internal_api`, the 48h window), kept identical; Phase 4 CI checks the copies match |
+| Databases in Phase 1 | Phase 1 | One SQLite file per service in its own `DATA_DIR` (`checkins.db`, `points.db`) until SQL Server in Phase 2 |
+| Photos in Phase 1 | Phase 1 | Files under each service's `DATA_DIR/uploads` until Phase 2 |
+| Package layout | Phase 1 | `services/checkins/app/` and `services/points/app/`, moved with `git mv` |
+| Ports and env vars | Phase 1 | checkins 8000, points 8001, UI 5500; `POINTS_URL`, `CHECKINS_URL`, `POINTS_TIMEOUT_S`, `CHECKINS_TIMEOUT_S`, `CORS_ORIGINS`, `AUTH_TOKEN_SECRET`, `INTERNAL_API_KEY`, `DATA_DIR`. Secrets have no default: a service refuses to start without them (replaces A1's "runs without a `.env`") |
+| Demo seed | Phase 1 | Two halves, one per service, run in order with both running; backdated times travel in the outbox; the Points half finds the crew through Checkins' public API |
+| `/health` in Phase 1 | Phase 1 | Minimal `{"status": "ok", "service": ...}`; the full one in Phase 2 |
+| Azure cold-start 503 in the UI | Phase 1 | "Starting up…" banner and automatic retries with backoff for about 60 s, then "try again" |
+| Integration test across the seam | Phase 1 | Both real services as subprocesses, including stopping one; client unit tests use an HTTP stub |
+| Upload tests | Phase 1 | Run in both services, so each copy is covered |
+| ADR statuses | Phase 1 | ADR-2 → Superseded by 6 now, ADR-3 → by 7 in Phase 2, ADR-4 → by 9 in Phase 4 |
+| Usernames across the seam | Phase 1 | Points returns user ids only; the UI shows names from Checkins' `/groups/{id}/members`, like the feed |
+| Internal API contract | Phase 1 | `POST /internal/completions`, `POST /internal/completions/{checkin_id}/revocation` (with `revoked_at` from Checkins), `GET /internal/groups/{id}`, all as built |
 
 ---
 
