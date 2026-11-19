@@ -4,7 +4,7 @@ from itertools import count
 import pytest
 
 from app.points import service
-from tests.factories import make_group, make_user
+from tests.factories import make_group, make_user, username_of
 
 THIS_WEEK = date(2026, 9, 28)
 NEXT_WEEK = date(2026, 10, 5)
@@ -45,7 +45,7 @@ def complete(conn, group_id):
 def board(conn, viewer, group_id, day=THIS_WEEK):
     """The leaderboard as (username, points, rank) tuples, for short assertions."""
     result = leaderboard(conn, viewer, group_id, day)
-    return [(e["username"], e["points"], e["rank"]) for e in result["entries"]]
+    return [(username_of(e["user_id"]), e["points"], e["rank"]) for e in result["entries"]]
 
 
 # --- scoring rule ---
@@ -202,7 +202,7 @@ def hit(complete, user_id, goal_id, at, times_per_week=2):
 
 def entry(conn, viewer, group_id, username, day=THIS_WEEK):
     result = leaderboard(conn, viewer, group_id, day)
-    return next(e for e in result["entries"] if e["username"] == username)
+    return next(e for e in result["entries"] if username_of(e["user_id"]) == username)
 
 
 def test_target_hit_two_weeks_in_a_row_earns_the_bonus(conn, users, group_id, complete):

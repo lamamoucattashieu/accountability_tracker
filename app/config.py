@@ -13,6 +13,8 @@ FORFEIT_MAX_LENGTH = 200
 COMMENT_MAX_LENGTH = 280
 NUDGE_MAX_LENGTH = 140
 DEFAULT_NUDGE_MESSAGE = "don't be a loser, get to work and get it done."
+# Most points-outbox rows delivered per request, so a long backlog can't make one request slow.
+OUTBOX_BATCH = 20
 
 
 class Settings:

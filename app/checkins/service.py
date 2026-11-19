@@ -3,9 +3,8 @@ import sqlite3
 from datetime import datetime, timezone
 
 from app.auth import service as auth_service
-from app.checkins import repository
+from app.checkins import outbox, repository
 from app.config import COMMENT_MAX_LENGTH, DEFAULT_NUDGE_MESSAGE, NUDGE_MAX_LENGTH, VOTING_WINDOW
-from app.points import service as points_service
 from app.shared import uploads
 from app.shared.timeutils import day_begins_at, utc_now_iso, week_begins_at, week_start_for
 
@@ -244,17 +243,16 @@ def create_checkin(conn, user_id: int, goal_id: int, photo_file, caption):
         checkin_id = repository.insert_checkin(
             conn, goal["id"], photo_path, caption, created_at
         )
-        # In-process call to the Points seam, in this same transaction. After a
-        # service split this could become a published event.
-        points_service.record_completion(
-            conn,
-            checkin_id=checkin_id,
-            group_id=goal["group_id"],
-            user_id=user_id,
-            goal_id=goal["id"],
-            times_per_week=goal["times_per_week"],
-            completed_at=created_at,
-        )
+        # The Points seam: queued in this same transaction, delivered after the
+        # commit (deliver_points_changes). Points being down never blocks a check-in.
+        outbox.enqueue_record(conn, {
+            "checkin_id": checkin_id,
+            "group_id": goal["group_id"],
+            "user_id": user_id,
+            "goal_id": goal["id"],
+            "times_per_week": goal["times_per_week"],
+            "completed_at": created_at,
+        })
     except Exception:
         # Either write failed, so the transaction won't commit: don't leave a
         # file that no row points to. If the commit in get_db() fails later, the
@@ -263,6 +261,19 @@ def create_checkin(conn, user_id: int, goal_id: int, photo_file, caption):
         uploads.delete_image(photo_path)
         raise
     return repository.get_checkin(conn, checkin_id)
+
+
+def deliver_points_changes(conn) -> None:
+    """Send queued points changes to Points. Runs after a request's own commit."""
+    outbox.deliver_pending(conn)
+
+
+def get_checkin(conn, checkin_id: int):
+    return repository.get_checkin(conn, checkin_id)
+
+
+def is_points_pending(conn, checkin_id: int) -> bool:
+    return bool(repository.get_checkin(conn, checkin_id)["points_pending"])
 
 
 def list_group_checkins(conn, user_id: int, group_id: int):
@@ -302,11 +313,11 @@ def cast_rejection_vote(conn, voter_id: int, checkin_id: int) -> dict:
     """Record a vote to reject a check-in, and reject it once the majority is reached.
 
     Everything below runs on one connection: the vote insert, the status change
-    and revoke_completion commit together in get_db(), or not at all. The checks
+    and the queued revoke commit together in get_db(), or not at all. The checks
     in _check_can_vote run before that transaction starts, so two simultaneous
     votes can both pass them; the worst case is one extra vote row on a check-in
-    that was just rejected. Status and revoke_completion stay correct because
-    mark_rejected only succeeds for one transaction.
+    that was just rejected. Status and the revoke stay correct because
+    mark_rejected only succeeds for one transaction, so only one revoke is queued.
     """
     checkin = repository.get_checkin(conn, checkin_id)
     if checkin is None:
@@ -322,7 +333,7 @@ def cast_rejection_vote(conn, voter_id: int, checkin_id: int) -> dict:
     status = checkin["status"]
     if is_rejected(reject_votes, eligible_voters) and repository.mark_rejected(conn, checkin_id):
         status = "rejected"
-        points_service.revoke_completion(conn, checkin_id)
+        outbox.enqueue_revoke(conn, checkin_id, checkin["group_id"], utc_now_iso())
     return {
         "checkin_id": checkin_id,
         "status": status,

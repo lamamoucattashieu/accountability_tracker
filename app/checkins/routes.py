@@ -117,7 +117,14 @@ def _checkin_response(checkin) -> dict:
     response = dict(checkin)
     del response["photo_path"]
     response["photo_url"] = f"/checkins/{checkin['id']}/photo"
+    response["points_pending"] = bool(checkin["points_pending"])
     return response
+
+
+def _deliver_points_changes():
+    """After the request's own commit: try to send queued points changes to Points."""
+    with get_db() as conn:
+        service.deliver_points_changes(conn)
 
 
 @router.post("/goals/{goal_id}/checkins", status_code=201, tags=["checkins"])
@@ -132,11 +139,15 @@ def create_checkin(
             checkin = service.create_checkin(conn, user["id"], goal_id, photo.file, caption)
         except HANDLED_ERRORS as exc:
             raise _to_http_error(exc)
+    _deliver_points_changes()
+    with get_db() as conn:
+        checkin = service.get_checkin(conn, checkin["id"])
     return _checkin_response(checkin)
 
 
 @router.get("/groups/{group_id}/checkins", tags=["checkins"])
 def list_checkins(group_id: int, user=Depends(get_current_user)):
+    _deliver_points_changes()  # the feed is where pending points get retried most often
     with get_db() as conn:
         try:
             checkins = service.list_group_checkins(conn, user["id"], group_id)
@@ -162,6 +173,9 @@ def vote_to_reject(checkin_id: int, user=Depends(get_current_user)):
             result = service.cast_rejection_vote(conn, user["id"], checkin_id)
         except HANDLED_ERRORS as exc:
             raise _to_http_error(exc)
+    _deliver_points_changes()
+    with get_db() as conn:
+        result["points_pending"] = service.is_points_pending(conn, checkin_id)
     return result
 
 

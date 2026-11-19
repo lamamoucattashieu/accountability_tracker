@@ -5,6 +5,7 @@ import pytest
 from app.checkins import repository, service
 from app.db import get_db
 from app.points import service as points_service
+from tests.checkins.conftest import queued_revokes
 from tests.factories import make_group, make_user
 from tests.images import image_file
 
@@ -68,21 +69,11 @@ def checkin(conn, alice, four_person_group):
     return service.create_checkin(conn, alice, goal["id"], image_file(), None)
 
 
-@pytest.fixture
-def revoke_calls(monkeypatch):
-    """Replace the Points stub with a recorder, so tests can count the calls."""
-    calls = []
-    monkeypatch.setattr(
-        points_service, "revoke_completion", lambda conn, checkin_id: calls.append(checkin_id)
-    )
-    return calls
-
-
 def status_of(conn, checkin_id):
     return repository.get_checkin(conn, checkin_id)["status"]
 
 
-def test_one_vote_short_keeps_checkin_accepted(conn, bob, checkin, revoke_calls):
+def test_one_vote_short_keeps_checkin_accepted(conn, bob, checkin):
     result = service.cast_rejection_vote(conn, bob, checkin["id"])
     assert result == {
         "checkin_id": checkin["id"],
@@ -91,25 +82,25 @@ def test_one_vote_short_keeps_checkin_accepted(conn, bob, checkin, revoke_calls)
         "votes_needed": 2,
     }
     assert status_of(conn, checkin["id"]) == "accepted"
-    assert revoke_calls == []
+    assert queued_revokes(conn) == []
 
 
-def test_reaching_the_threshold_rejects_and_revokes_once(conn, bob, carol, checkin, revoke_calls):
+def test_reaching_the_threshold_rejects_and_revokes_once(conn, bob, carol, checkin):
     service.cast_rejection_vote(conn, bob, checkin["id"])
     result = service.cast_rejection_vote(conn, carol, checkin["id"])
     assert result["status"] == "rejected"
     assert status_of(conn, checkin["id"]) == "rejected"
-    assert revoke_calls == [checkin["id"]]
+    assert queued_revokes(conn) == [checkin["id"]]
 
 
 def test_vote_after_rejection_is_conflict_and_does_not_revoke_again(
-    conn, bob, carol, dave, checkin, revoke_calls
+    conn, bob, carol, dave, checkin
 ):
     service.cast_rejection_vote(conn, bob, checkin["id"])
     service.cast_rejection_vote(conn, carol, checkin["id"])
     with pytest.raises(service.CheckinAlreadyRejected):
         service.cast_rejection_vote(conn, dave, checkin["id"])
-    assert revoke_calls == [checkin["id"]]
+    assert queued_revokes(conn) == [checkin["id"]]
 
 
 def test_mark_rejected_only_succeeds_once(conn, checkin):
@@ -118,7 +109,7 @@ def test_mark_rejected_only_succeeds_once(conn, checkin):
     assert repository.mark_rejected(conn, checkin["id"]) is False
 
 
-def test_duplicate_vote_is_conflict(conn, bob, checkin, revoke_calls):
+def test_duplicate_vote_is_conflict(conn, bob, checkin):
     service.cast_rejection_vote(conn, bob, checkin["id"])
     with pytest.raises(service.AlreadyVoted):
         service.cast_rejection_vote(conn, bob, checkin["id"])
@@ -156,22 +147,22 @@ def test_vote_after_window_is_closed(conn, bob, checkin):
     assert repository.count_votes(conn, checkin["id"]) == 0
 
 
-def test_two_person_group_one_vote_rejects(conn, alice, bob, group_id, goal, revoke_calls):
+def test_two_person_group_one_vote_rejects(conn, alice, bob, group_id, goal):
     checkin = service.create_checkin(conn, alice, goal["id"], image_file(), None)
     result = service.cast_rejection_vote(conn, bob, checkin["id"])
     assert result["status"] == "rejected"
-    assert revoke_calls == [checkin["id"]]
+    assert queued_revokes(conn) == [checkin["id"]]
 
 
-def test_failed_revoke_rolls_back_vote_and_status(conn, bob, carol, checkin, monkeypatch):
-    """Vote, status change and revoke are one transaction: an error undoes all of them."""
+def test_failed_revoke_queueing_rolls_back_vote_and_status(conn, bob, carol, checkin, monkeypatch):
+    """Vote, status change and queued revoke are one local transaction: an error undoes all of them."""
     service.cast_rejection_vote(conn, bob, checkin["id"])
     conn.commit()  # keep the setup and bob's vote; carol's vote gets its own transaction
 
-    def failing_revoke(conn, checkin_id):
-        raise RuntimeError("points unavailable")
+    def failing_insert(*args):
+        raise RuntimeError("disk full")
 
-    monkeypatch.setattr(points_service, "revoke_completion", failing_revoke)
+    monkeypatch.setattr(repository, "insert_outbox", failing_insert)
     with pytest.raises(RuntimeError):
         with get_db() as request_conn:  # the same get_db() a real request uses
             service.cast_rejection_vote(request_conn, carol, checkin["id"])
@@ -180,13 +171,25 @@ def test_failed_revoke_rolls_back_vote_and_status(conn, bob, carol, checkin, mon
     assert status_of(conn, checkin["id"]) == "accepted"
 
 
+def test_rejection_is_saved_when_points_is_down(conn, bob, carol, checkin, points):
+    """Replaces A1's "a failing revoke rolls the vote back": Points being down no longer blocks voting."""
+    points.mode = "down"
+    service.cast_rejection_vote(conn, bob, checkin["id"])
+    service.cast_rejection_vote(conn, carol, checkin["id"])
+    conn.commit()
+    service.deliver_points_changes(conn)
+    assert status_of(conn, checkin["id"]) == "rejected"
+    assert service.is_points_pending(conn, checkin["id"]) is True
+
+
 def test_rejection_by_vote_removes_the_points_from_the_leaderboard(
     conn, alice, bob, carol, four_person_group, checkin
 ):
-    """End to end through the real seam: no recorder replaces revoke_completion here."""
+    """End to end through the real seam: the outbox delivers to the real Points code."""
     def alice_points():
         posted = datetime.fromisoformat(checkin["created_at"])
         conn.commit()  # like a new request: settlement never starts inside an open transaction
+        service.deliver_points_changes(conn)  # what the route does after each check-in and vote
         board = points_service.get_leaderboard(conn, bob, four_person_group, posted.date(), posted)
         return next(e["points"] for e in board["entries"] if e["user_id"] == alice)
 

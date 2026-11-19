@@ -16,6 +16,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.auth import repository as auth_repository
 from app.auth import service as auth_service
+from app.checkins import outbox
+from app.checkins import repository as checkins_repository
 from app.checkins import service as checkins_service
 from app.db import get_connection, init_db
 from app.points import repository as points_repository
@@ -23,6 +25,7 @@ from app.points import service as points_service
 from app.shared.timeutils import week_begins_at, week_start_for
 
 PASSWORD = "lockin-demo"
+SEED_OUTBOX_LIMIT = 1000  # far more rows than the demo ever queues
 CREW = ["maya", "leo", "zoe", "sam"]  # maya is the account to log in with
 WEEK = timedelta(weeks=1)
 COLORS = {"purple": (138, 123, 255), "lime": (187, 255, 92), "coral": (255, 122, 87),
@@ -88,10 +91,12 @@ def seed(now: datetime) -> dict:
         return checkin["id"]
 
     def move_checkin(checkin_id, at):
+        """Backdate the check-in and its queued completion, before the outbox delivers it."""
         conn.execute("UPDATE checkins SET created_at = ? WHERE id = ?", (iso(at), checkin_id))
         conn.execute(
-            "UPDATE point_events SET completed_at = ?, week_start = ? WHERE checkin_id = ?",
-            (iso(at), week_start_for(at).isoformat(), checkin_id),
+            """UPDATE points_outbox SET payload = json_set(payload, '$.completed_at', ?)
+               WHERE checkin_id = ? AND kind = 'record' AND sent_at IS NULL""",
+            (iso(at), checkin_id),
         )
 
     day = timedelta(days=1)
@@ -152,7 +157,11 @@ def seed(now: datetime) -> dict:
         checkins_service.add_comment(conn, ids["maya"], maya_post, "receipts attached")
     conn.commit()
 
-    # --- settle finished weeks, then proof for the oldest loss ---------------------
+    # --- deliver the queued points, then settle finished weeks and add proof -------
+    # The whole backlog at once: a request sends only OUTBOX_BATCH rows, the seed sends all.
+    outbox.deliver_pending(conn, limit=SEED_OUTBOX_LIMIT)
+    if checkins_repository.pending_outbox(conn, 1):
+        raise SystemExit("Points didn't take every demo check-in. Is the Points service running?")
     points_service.ensure_settled(conn, group["id"], now)
     sam_loss = conn.execute(
         """SELECT forfeit_assignments.id FROM forfeit_assignments

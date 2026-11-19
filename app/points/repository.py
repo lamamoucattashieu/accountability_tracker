@@ -51,6 +51,16 @@ CREATE TABLE IF NOT EXISTS forfeit_assignments (
     UNIQUE (settlement_id, user_id),
     CHECK ((proof_path IS NULL) = (proof_at IS NULL))
 );
+
+-- The last answer Checkins gave about a group (cache-aside). Read only when
+-- Checkins can't be reached, so Points can keep serving its own domain.
+CREATE TABLE IF NOT EXISTS group_snapshots (
+    group_id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    members TEXT NOT NULL,
+    pending_points_sync INTEGER NOT NULL CHECK (pending_points_sync IN (0, 1)),
+    fetched_at TEXT NOT NULL
+);
 """
 
 
@@ -271,3 +281,34 @@ def set_proof(conn, assignment_id, proof_path, proof_at):
         (proof_path, proof_at, assignment_id),
     )
     return cur.rowcount == 1
+
+
+# --- group snapshots ---
+
+def save_group_snapshot(conn, group: dict, fetched_at):
+    conn.execute(
+        """
+        INSERT INTO group_snapshots (group_id, created_at, members, pending_points_sync, fetched_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (group_id) DO UPDATE SET
+            created_at = excluded.created_at,
+            members = excluded.members,
+            pending_points_sync = excluded.pending_points_sync,
+            fetched_at = excluded.fetched_at
+        """,
+        (group["id"], group["created_at"], json.dumps(group["members"]),
+         int(group["pending_points_sync"]), fetched_at),
+    )
+
+
+def get_group_snapshot(conn, group_id):
+    row = conn.execute("SELECT * FROM group_snapshots WHERE group_id = ?", (group_id,)).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["group_id"],
+        "created_at": row["created_at"],
+        "members": json.loads(row["members"]),
+        "pending_points_sync": bool(row["pending_points_sync"]),
+        "fetched_at": row["fetched_at"],
+    }

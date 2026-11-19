@@ -121,4 +121,4 @@ def test_forfeits_view_says_who_may_set_the_next_one(call, conn, people, group):
     as_ana = call(service.get_forfeits, people["ana"], group, WEDNESDAY)
     assert as_ben["can_set"] is True
     assert as_ana["can_set"] is False
-    assert as_ana["setters"] == [{"id": people["ben"], "username": "ben"}]
+    assert as_ana["setters"] == [{"id": people["ben"]}]  # ids only: the UI adds names

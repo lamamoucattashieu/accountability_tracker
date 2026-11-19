@@ -48,6 +48,22 @@ CREATE TABLE IF NOT EXISTS nudges (
     UNIQUE (group_id, nudger_id, nudged_id, day),
     CHECK (nudger_id != nudged_id)
 );
+
+-- Transactional outbox: a points change for the Points service, written in the
+-- same transaction as the check-in or rejection it belongs to, and delivered
+-- afterwards. Pending = neither sent nor failed. The payload is stored as it was
+-- at write time, so a goal edited later can't change how the check-in scores.
+CREATE TABLE IF NOT EXISTS points_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('record', 'revoke')),
+    checkin_id INTEGER NOT NULL REFERENCES checkins(id),
+    group_id INTEGER NOT NULL REFERENCES groups(id),
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    sent_at TEXT,
+    failed_at TEXT,
+    last_error TEXT
+);
 """
 
 
@@ -117,7 +133,11 @@ def insert_checkin(conn, goal_id, photo_path, caption, created_at):
 CHECKIN_WITH_GOAL_SQL = """
     SELECT checkins.*, goals.group_id, goals.user_id, goals.title AS goal_title,
            (SELECT COUNT(*) FROM checkin_comments
-            WHERE checkin_comments.checkin_id = checkins.id) AS comment_count
+            WHERE checkin_comments.checkin_id = checkins.id) AS comment_count,
+           EXISTS (SELECT 1 FROM points_outbox
+                   WHERE points_outbox.checkin_id = checkins.id
+                     AND points_outbox.sent_at IS NULL
+                     AND points_outbox.failed_at IS NULL) AS points_pending
     FROM checkins
     JOIN goals ON goals.id = checkins.goal_id
 """
@@ -248,3 +268,55 @@ def nudges_received_on(conn, group_id, nudged_id, day):
         """,
         (group_id, nudged_id, day),
     ).fetchall()
+
+
+# --- points outbox ---
+
+def insert_outbox(conn, kind, checkin_id, group_id, payload, created_at):
+    conn.execute(
+        """
+        INSERT INTO points_outbox (kind, checkin_id, group_id, payload, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (kind, checkin_id, group_id, payload, created_at),
+    )
+
+
+def pending_outbox(conn, limit):
+    """Oldest first, so a check-in's revoke is never sent before its record."""
+    return conn.execute(
+        """
+        SELECT * FROM points_outbox
+        WHERE sent_at IS NULL AND failed_at IS NULL
+        ORDER BY id
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def mark_outbox_sent(conn, outbox_id, sent_at):
+    conn.execute("UPDATE points_outbox SET sent_at = ? WHERE id = ?", (sent_at, outbox_id))
+
+
+def mark_outbox_failed(conn, outbox_id, failed_at, error):
+    conn.execute(
+        "UPDATE points_outbox SET failed_at = ?, last_error = ? WHERE id = ?",
+        (failed_at, error, outbox_id),
+    )
+
+
+def note_outbox_error(conn, outbox_id, error):
+    conn.execute("UPDATE points_outbox SET last_error = ? WHERE id = ?", (error, outbox_id))
+
+
+def group_has_pending_outbox(conn, group_id):
+    row = conn.execute(
+        """
+        SELECT 1 FROM points_outbox
+        WHERE group_id = ? AND sent_at IS NULL AND failed_at IS NULL
+        LIMIT 1
+        """,
+        (group_id,),
+    ).fetchone()
+    return row is not None

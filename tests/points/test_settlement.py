@@ -8,7 +8,7 @@ import pytest
 from app.config import settings
 from app.db import get_connection
 from app.points import repository, service
-from tests.factories import make_group, make_user
+from tests.factories import make_group, make_user, username_of
 from tests.points.conftest import backdate_group, backdate_join, complete, utc
 
 WEEK = date(2026, 9, 28)
@@ -34,7 +34,7 @@ def week_of(call, viewer, group, now, week=WEEK):
 
 
 def losers(settlement):
-    return [a["username"] for a in settlement["assignments"]]
+    return [username_of(a["user_id"]) for a in settlement["assignments"]]
 
 
 @pytest.fixture
@@ -319,11 +319,12 @@ def test_failure_mid_settlement_leaves_no_half_settled_week(call, conn, people, 
     def failing_assignment(*args):
         raise RuntimeError("crash after the settlement row was inserted")
 
+    real_insert_assignment = repository.insert_assignment
     monkeypatch.setattr(repository, "insert_assignment", failing_assignment)
     with pytest.raises(RuntimeError):
         call(service.ensure_settled, group, SETTLES)
     assert WEEK.isoformat() not in repository.settled_week_starts(conn, group)
-    monkeypatch.undo()
+    monkeypatch.setattr(repository, "insert_assignment", real_insert_assignment)
     call(service.ensure_settled, group, SETTLES)  # the next request settles it properly
     assert losers(week_of(call, people["ana"], group, SETTLES)) == ["ben", "cy"]
 

@@ -1,10 +1,10 @@
 import io
+import json
 import sqlite3
 
 import pytest
 
 from app.checkins import repository, service
-from app.points import service as points_service
 from app.shared import uploads
 from tests.factories import make_group
 from tests.images import image_file
@@ -160,24 +160,37 @@ def test_missing_photo_file_is_not_found_and_logged(conn, data_dir, alice, check
     assert "missing photo" in caplog.text
 
 
-# --- points seam ---
+# --- points seam (the outbox) ---
 
-def test_new_checkin_is_recorded_in_points(conn, alice, group_id, goal, checkin):
-    event = conn.execute(
-        "SELECT * FROM point_events WHERE checkin_id = ?", (checkin["id"],)
-    ).fetchone()
-    assert event["user_id"] == alice
-    assert event["group_id"] == group_id
-    assert event["goal_id"] == goal["id"]
-    assert event["times_per_week"] == goal["times_per_week"]
-    assert event["completed_at"] == checkin["created_at"]
+def test_new_checkin_queues_its_completion_for_points(conn, alice, group_id, goal, checkin):
+    row = conn.execute("SELECT * FROM points_outbox WHERE checkin_id = ?", (checkin["id"],)).fetchone()
+    assert row["kind"] == "record"
+    assert json.loads(row["payload"]) == {
+        "checkin_id": checkin["id"],
+        "group_id": group_id,
+        "user_id": alice,
+        "goal_id": goal["id"],
+        "times_per_week": goal["times_per_week"],
+        "completed_at": checkin["created_at"],
+    }
+    assert checkin["points_pending"] == 1  # not delivered yet
 
 
-def test_photo_is_deleted_when_recording_points_fails(conn, data_dir, alice, goal, monkeypatch):
-    def failing_record(conn, **completion):
+def test_checkin_is_saved_when_points_is_down(conn, alice, goal, points):
+    """Replaces A1's "photo deleted when recording points fails": recording can't fail any more."""
+    points.mode = "down"
+    checkin = service.create_checkin(conn, alice, goal["id"], image_file(), None)
+    conn.commit()
+    service.deliver_points_changes(conn)
+    assert service.get_checkin(conn, checkin["id"])["status"] == "accepted"
+    assert service.is_points_pending(conn, checkin["id"]) is True
+
+
+def test_photo_is_deleted_when_queueing_the_completion_fails(conn, data_dir, alice, goal, monkeypatch):
+    def failing_insert(*args):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(points_service, "record_completion", failing_record)
+    monkeypatch.setattr(repository, "insert_outbox", failing_insert)
     with pytest.raises(sqlite3.OperationalError):
         service.create_checkin(conn, alice, goal["id"], image_file(), None)
     assert stored_files(data_dir) == []

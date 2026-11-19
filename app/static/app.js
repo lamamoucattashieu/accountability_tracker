@@ -792,9 +792,9 @@ function memberCard(entry, progress) {
   const isMe = entry.user_id === state.me.id;
   return el("li", { class: isMe ? "member-card me" : "member-card" },
     el("div", { class: "person" },
-      avatar(entry.user_id, entry.username),
+      avatar(entry.user_id),
       el("div", { class: "person-text" },
-        el("span", { class: "person-name", text: isMe ? `${entry.username} (you)` : entry.username }),
+        el("span", { class: "person-name", text: isMe ? `${usernameOf(entry.user_id)} (you)` : usernameOf(entry.user_id) }),
         el("span", { class: "muted", text: `${progressText(progress)} · #${entry.rank} this week` }),
         nudgeControl(entry, progress),
       ),
@@ -815,7 +815,7 @@ function nudgeControl(entry, progress) {
     return null;
   }
   const form = actionForm({
-    fields: [input(`What should ${entry.username} see?`, {
+    fields: [input(`What should ${usernameOf(entry.user_id)} see?`, {
       name: "message", maxlength: "140", placeholder: "don't be a loser, get to work and get it done.",
     })],
     submitLabel: "send nudge",
@@ -913,7 +913,7 @@ function standingsCard(board) {
           class: entry.user_id === state.me.id ? "bar-fill me" : "bar-fill",
           style: `height: ${Math.round((entry.points / most) * 100)}%`,
         })),
-      el("span", { class: "bar-label", text: entry.user_id === state.me.id ? "you" : entry.username }),
+      el("span", { class: "bar-label", text: entry.user_id === state.me.id ? "you" : usernameOf(entry.user_id) }),
     ))),
   );
 }

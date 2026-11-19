@@ -22,6 +22,8 @@ STATUS_CODES = {
     service.NotAssignee: 403,
     service.ProofAlreadySubmitted: 409,
     service.ProofNotFound: 404,
+    service.GroupInfoUnavailable: 503,
+    service.GroupInfoStale: 503,
     InvalidImage: 415,
     ImageTooLarge: 413,
 }
