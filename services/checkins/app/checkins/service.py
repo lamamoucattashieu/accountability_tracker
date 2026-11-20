@@ -1,11 +1,11 @@
 import logging
-import sqlite3
 from datetime import datetime, timezone
 
 from app.auth import service as auth_service
 from app.checkins import outbox, repository
 from app.config import COMMENT_MAX_LENGTH, DEFAULT_NUDGE_MESSAGE, NUDGE_MAX_LENGTH, VOTING_WINDOW
 from app.shared import uploads
+from app.shared.database import is_duplicate_key
 from app.shared.timeutils import day_begins_at, utc_now_iso, week_begins_at, week_start_for
 
 logger = logging.getLogger(__name__)
@@ -51,10 +51,6 @@ class CheckinNotFound(CheckinsError):
 
 
 class InvalidCheckin(CheckinsError):
-    pass
-
-
-class PhotoMissing(CheckinsError):
     pass
 
 
@@ -237,29 +233,21 @@ def archive_goal(conn, user_id: int, goal_id: int):
 def create_checkin(conn, user_id: int, goal_id: int, photo_file, caption):
     goal = _get_owned_goal(conn, user_id, goal_id)
     caption = _validate_caption(caption)
-    photo_path = uploads.save_image(photo_file)
+    photo, photo_type = uploads.validate_image(photo_file)
     created_at = utc_now_iso()
-    try:
-        checkin_id = repository.insert_checkin(
-            conn, goal["id"], photo_path, caption, created_at
-        )
-        # The Points seam: queued in this same transaction, delivered after the
-        # commit (deliver_points_changes). Points being down never blocks a check-in.
-        outbox.enqueue_record(conn, {
-            "checkin_id": checkin_id,
-            "group_id": goal["group_id"],
-            "user_id": user_id,
-            "goal_id": goal["id"],
-            "times_per_week": goal["times_per_week"],
-            "completed_at": created_at,
-        })
-    except Exception:
-        # Either write failed, so the transaction won't commit: don't leave a
-        # file that no row points to. If the commit in get_db() fails later, the
-        # file is orphaned anyway: harmless wasted disk, unlike a row pointing
-        # to a missing file (handled by PhotoMissing).
-        uploads.delete_image(photo_path)
-        raise
+    # The photo is stored in the check-in's row, so the check-in, its photo and its
+    # queued points change commit together, or none of them does.
+    checkin_id = repository.insert_checkin(conn, goal["id"], photo, photo_type, caption, created_at)
+    # The Points seam: queued in this same transaction, delivered after the
+    # commit (deliver_points_changes). Points being down never blocks a check-in.
+    outbox.enqueue_record(conn, {
+        "checkin_id": checkin_id,
+        "group_id": goal["group_id"],
+        "user_id": user_id,
+        "goal_id": goal["id"],
+        "times_per_week": goal["times_per_week"],
+        "completed_at": created_at,
+    })
     return repository.get_checkin(conn, checkin_id)
 
 
@@ -302,18 +290,15 @@ def list_group_checkins(conn, user_id: int, group_id: int):
     return repository.list_checkins_for_group(conn, group_id, FEED_LIMIT)
 
 
-def get_checkin_photo_path(conn, user_id: int, checkin_id: int):
-    """Access-control gate in front of the file: only group members get the path."""
+def get_checkin_photo(conn, user_id: int, checkin_id: int) -> tuple[bytes, str]:
+    """Access-control gate in front of the photo: only group members get its bytes."""
     checkin = repository.get_checkin(conn, checkin_id)
     if checkin is None:
         raise CheckinNotFound("check-in not found")
     if not auth_service.is_member(conn, checkin["group_id"], user_id):
         raise NotGroupMember("not a member of this group")
-    path = uploads.resolve_path(checkin["photo_path"])
-    if not path.is_file():
-        logger.warning("check-in %s points to missing photo %s", checkin_id, path)
-        raise PhotoMissing("photo not found")
-    return path
+    photo = repository.get_checkin_photo(conn, checkin_id)
+    return photo["photo"], photo["photo_type"]
 
 
 def _check_can_vote(conn, voter_id: int, checkin):
@@ -346,7 +331,9 @@ def cast_rejection_vote(conn, voter_id: int, checkin_id: int) -> dict:
     _check_can_vote(conn, voter_id, checkin)
     try:
         repository.insert_vote(conn, checkin_id, voter_id, utc_now_iso())
-    except sqlite3.IntegrityError:
+    except Exception as exc:
+        if not is_duplicate_key(exc, "UQ_checkin_votes_once"):
+            raise
         raise AlreadyVoted("you already voted on this check-in")
 
     reject_votes = repository.count_votes(conn, checkin_id)
@@ -454,7 +441,9 @@ def send_nudge(conn, user_id: int, group_id: int, target_id: int, message, now: 
             conn, group_id, user_id, target_id, message,
             now.date().isoformat(), now.isoformat(timespec="seconds"),
         )
-    except sqlite3.IntegrityError:  # UNIQUE (group, nudger, nudged, day)
+    except Exception as exc:
+        if not is_duplicate_key(exc, "UQ_nudges_once_a_day"):
+            raise
         raise AlreadyNudged("you already nudged them today")
     return {"id": nudge_id, "nudged_id": target_id, "message": message}
 

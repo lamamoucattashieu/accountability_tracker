@@ -1,17 +1,19 @@
 import io
 import json
-import sqlite3
+
+import pymssql
 
 import pytest
 
 from app.checkins import repository, service
+from app.db import get_db
 from app.shared import uploads
 from tests.factories import make_group
-from tests.images import image_file
+from tests.images import image_bytes, image_file
 
 
-def stored_files(data_dir):
-    return list((data_dir / "uploads").iterdir())
+def checkin_count(conn):
+    return conn.execute("SELECT COUNT(*) AS n FROM checkins").fetchone()["n"]
 
 
 @pytest.fixture
@@ -21,14 +23,15 @@ def checkin(conn, alice, goal):
 
 # --- create ---
 
-def test_create_checkin_is_accepted_and_stores_photo(conn, data_dir, alice, goal):
+def test_create_checkin_is_accepted_and_stores_photo(conn, alice, goal):
     checkin = service.create_checkin(conn, alice, goal["id"], image_file("PNG"), None)
     assert checkin["status"] == "accepted"
     assert checkin["goal_id"] == goal["id"]
     assert checkin["user_id"] == alice
     assert checkin["created_at"].endswith("+00:00")
-    assert checkin["photo_path"].endswith(".png")
-    assert (data_dir / checkin["photo_path"]).is_file()
+    assert "photo" not in checkin  # the bytes are never part of a check-in row read
+    photo, photo_type = service.get_checkin_photo(conn, alice, checkin["id"])
+    assert (photo, photo_type) == (image_bytes("PNG"), "image/png")
 
 
 def test_caption_is_trimmed(conn, alice, goal):
@@ -42,18 +45,18 @@ def test_empty_caption_is_stored_as_null(conn, alice, goal, caption):
     assert checkin["caption"] is None
 
 
-def test_caption_limit_applies_after_trimming(conn, data_dir, alice, goal):
+def test_caption_limit_applies_after_trimming(conn, alice, goal):
     checkin = service.create_checkin(conn, alice, goal["id"], image_file(), " " + "c" * 200 + " ")
     assert len(checkin["caption"]) == 200
     with pytest.raises(service.InvalidCheckin):
         service.create_checkin(conn, alice, goal["id"], image_file(), "c" * 201)
-    assert len(stored_files(data_dir)) == 1  # the rejected one was never saved
+    assert checkin_count(conn) == 1  # the rejected one was never saved
 
 
-def test_non_owner_member_cannot_check_in(conn, data_dir, bob, goal):
+def test_non_owner_member_cannot_check_in(conn, bob, goal):
     with pytest.raises(service.NotGoalOwner):
         service.create_checkin(conn, bob, goal["id"], image_file(), None)
-    assert stored_files(data_dir) == []
+    assert checkin_count(conn) == 0
 
 
 def test_non_member_cannot_check_in(conn, outsider, goal):
@@ -66,11 +69,11 @@ def test_check_in_on_missing_goal_is_not_found(conn, alice):
         service.create_checkin(conn, alice, 999, image_file(), None)
 
 
-def test_check_in_on_archived_goal_is_conflict(conn, data_dir, alice, goal):
+def test_check_in_on_archived_goal_is_conflict(conn, alice, goal):
     service.archive_goal(conn, alice, goal["id"])
     with pytest.raises(service.GoalArchived):
         service.create_checkin(conn, alice, goal["id"], image_file(), None)
-    assert stored_files(data_dir) == []
+    assert checkin_count(conn) == 0
 
 
 def test_invalid_photo_is_rejected(conn, alice, goal):
@@ -78,20 +81,20 @@ def test_invalid_photo_is_rejected(conn, alice, goal):
         service.create_checkin(conn, alice, goal["id"], io.BytesIO(b"not an image"), None)
 
 
-def test_photo_is_deleted_when_insert_fails(conn, data_dir, alice, goal, monkeypatch):
+def test_nothing_is_kept_when_the_insert_fails(conn, alice, goal, monkeypatch):
     def failing_insert(*args):
-        raise sqlite3.OperationalError("database is locked")
+        raise pymssql.OperationalError(1222, b"Lock request time out period exceeded.")
 
     monkeypatch.setattr(repository, "insert_checkin", failing_insert)
-    with pytest.raises(sqlite3.OperationalError):
+    with pytest.raises(pymssql.OperationalError):
         service.create_checkin(conn, alice, goal["id"], image_file(), None)
-    assert stored_files(data_dir) == []
+    assert checkin_count(conn) == 0
 
 
 def test_database_rejects_unknown_status(conn, checkin):
     """The CHECK constraint only allows 'accepted' and 'rejected'."""
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("UPDATE checkins SET status = 'pending' WHERE id = ?", (checkin["id"],))
+    with pytest.raises(pymssql.IntegrityError):
+        conn.execute("UPDATE checkins SET status = 'pending' WHERE id = %s", (checkin["id"],))
 
 
 # --- feed ---
@@ -138,32 +141,24 @@ def test_feed_of_missing_group_is_not_found(conn, alice):
 
 # --- photo access ---
 
-def test_member_gets_photo_path(conn, data_dir, bob, checkin):
-    path = service.get_checkin_photo_path(conn, bob, checkin["id"])
-    assert path == (data_dir / checkin["photo_path"]).resolve()
+def test_member_gets_the_photo(conn, bob, checkin):
+    assert service.get_checkin_photo(conn, bob, checkin["id"]) == (image_bytes("JPEG"), "image/jpeg")
 
 
 def test_non_member_cannot_get_photo(conn, outsider, checkin):
     with pytest.raises(service.NotGroupMember):
-        service.get_checkin_photo_path(conn, outsider, checkin["id"])
+        service.get_checkin_photo(conn, outsider, checkin["id"])
 
 
 def test_photo_of_missing_checkin_is_not_found(conn, alice):
     with pytest.raises(service.CheckinNotFound):
-        service.get_checkin_photo_path(conn, alice, 999)
-
-
-def test_missing_photo_file_is_not_found_and_logged(conn, data_dir, alice, checkin, caplog):
-    (data_dir / checkin["photo_path"]).unlink()
-    with pytest.raises(service.PhotoMissing):
-        service.get_checkin_photo_path(conn, alice, checkin["id"])
-    assert "missing photo" in caplog.text
+        service.get_checkin_photo(conn, alice, 999)
 
 
 # --- points seam (the outbox) ---
 
 def test_new_checkin_queues_its_completion_for_points(conn, alice, group_id, goal, checkin):
-    row = conn.execute("SELECT * FROM points_outbox WHERE checkin_id = ?", (checkin["id"],)).fetchone()
+    row = conn.execute("SELECT * FROM points_outbox WHERE checkin_id = %s", (checkin["id"],)).fetchone()
     assert row["kind"] == "record"
     assert json.loads(row["payload"]) == {
         "checkin_id": checkin["id"],
@@ -186,14 +181,18 @@ def test_checkin_is_saved_when_points_is_down(conn, alice, goal, points):
     assert service.is_points_pending(conn, checkin["id"]) is True
 
 
-def test_photo_is_deleted_when_queueing_the_completion_fails(conn, data_dir, alice, goal, monkeypatch):
+def test_nothing_is_kept_when_queueing_the_completion_fails(conn, alice, goal, monkeypatch):
+    """The check-in, its photo and its outbox row are one transaction: replaces A1's photo-file cleanup."""
+    conn.commit()  # keep the setup; the check-in gets its own request transaction
+
     def failing_insert(*args):
-        raise sqlite3.OperationalError("database is locked")
+        raise pymssql.OperationalError(1222, b"Lock request time out period exceeded.")
 
     monkeypatch.setattr(repository, "insert_outbox", failing_insert)
-    with pytest.raises(sqlite3.OperationalError):
-        service.create_checkin(conn, alice, goal["id"], image_file(), None)
-    assert stored_files(data_dir) == []
+    with pytest.raises(pymssql.OperationalError):
+        with get_db() as request_conn:  # the same get_db() a real request uses
+            service.create_checkin(request_conn, alice, goal["id"], image_file(), None)
+    assert checkin_count(conn) == 0
 
 
 # --- comments on proof ---
@@ -241,5 +240,6 @@ def test_comment_on_missing_checkin_is_not_found(conn, bob):
 
 
 def test_database_also_enforces_the_comment_length(conn, bob, checkin):
-    with pytest.raises(sqlite3.IntegrityError):
+    # NVARCHAR(280) refuses it before the CHECK runs ("would be truncated"): either way, not stored.
+    with pytest.raises(pymssql.DatabaseError):
         repository.insert_comment(conn, checkin["id"], bob, "x" * 281, "2026-10-03T10:00:00+00:00")

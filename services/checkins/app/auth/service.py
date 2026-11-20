@@ -7,6 +7,7 @@ from app.auth.security import (
     new_session_token,
     verify_password,
 )
+from app.config import USERNAME_MAX_LENGTH
 from app.shared.timeutils import utc_now_iso
 
 SESSION_TTL = timedelta(days=7)
@@ -44,6 +45,8 @@ def _create_session(conn, user_id: int) -> str:
 def register(conn, username: str, password: str) -> str:
     if len(username) < 3:
         raise ValueError("username must be at least 3 characters")
+    if len(username) > USERNAME_MAX_LENGTH:
+        raise ValueError(f"username must be at most {USERNAME_MAX_LENGTH} characters")
     if len(password) < 8:
         raise ValueError("password must be at least 8 characters")
     if repository.get_user_by_username(conn, username):

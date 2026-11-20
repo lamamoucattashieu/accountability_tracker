@@ -1,4 +1,4 @@
-import sqlite3
+import pymssql
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -17,7 +17,7 @@ def post_at(conn, user_id, goal_id, created_at, status="accepted"):
     """A check-in at a chosen time (the service stamps the real clock, so it's moved after)."""
     checkin = service.create_checkin(conn, user_id, goal_id, image_file(), None)
     conn.execute(
-        "UPDATE checkins SET created_at = ?, status = ? WHERE id = ?",
+        "UPDATE checkins SET created_at = %s, status = %s WHERE id = %s",
         (created_at, status, checkin["id"]),
     )
     return checkin["id"]
@@ -138,7 +138,7 @@ def test_non_member_cannot_nudge_or_see_progress(conn, outsider, bob, group_id):
 
 
 def test_database_also_blocks_self_nudges(conn, alice, group_id):
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(pymssql.IntegrityError):
         repository.insert_nudge(conn, group_id, alice, alice, "hi", "2026-09-30", "t")
 
 

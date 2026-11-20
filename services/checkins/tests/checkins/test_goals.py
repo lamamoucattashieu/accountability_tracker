@@ -1,4 +1,4 @@
-import sqlite3
+import pymssql
 
 import pytest
 
@@ -189,7 +189,7 @@ def test_archiving_twice_is_conflict_and_keeps_timestamp(conn, alice, goal):
     with pytest.raises(service.GoalArchived):
         service.archive_goal(conn, alice, goal["id"])
     row = conn.execute(
-        "SELECT archived_at FROM goals WHERE id = ?", (goal["id"],)
+        "SELECT archived_at FROM goals WHERE id = %s", (goal["id"],)
     ).fetchone()
     assert row["archived_at"] == first["archived_at"]
 
@@ -213,5 +213,5 @@ def test_archive_missing_goal_is_not_found(conn, alice):
 
 def test_database_rejects_times_per_week_out_of_range(conn, alice, group_id):
     """The CHECK constraint is a second line of defence behind the service."""
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(pymssql.IntegrityError):
         repository.insert_goal(conn, group_id, alice, "Gym", None, 9, utc_now_iso())

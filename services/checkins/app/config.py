@@ -1,12 +1,13 @@
 import os
 from datetime import timedelta
-from pathlib import Path
 
 # Business rules of Goals & Check-ins.
 # VOTING_WINDOW must equal Points' VOTING_WINDOW (services/points/app/config.py),
 # which settles a week only once every voting window for its check-ins has closed.
 # The two copies are kept identical, and Phase 4 CI checks that they still match.
 VOTING_WINDOW = timedelta(hours=48)
+# Length limits: migrations/001_init.sql holds the same numbers (tests compare them).
+USERNAME_MAX_LENGTH = 50
 COMMENT_MAX_LENGTH = 280
 NUDGE_MAX_LENGTH = 140
 DEFAULT_NUDGE_MESSAGE = "don't be a loser, get to work and get it done."
@@ -20,7 +21,8 @@ DEFAULT_TIMEOUT_S = 2.0
 DEFAULT_UI_ORIGIN = "http://localhost:5500"
 
 # Secrets have no default (A2 spec 8a): the service refuses to start without them.
-REQUIRED_SECRETS = ("AUTH_TOKEN_SECRET", "INTERNAL_API_KEY")
+# DATABASE_URL holds the database password, so it is a secret too.
+REQUIRED_SECRETS = ("DATABASE_URL", "AUTH_TOKEN_SECRET", "INTERNAL_API_KEY")
 
 
 class MissingSecret(RuntimeError):
@@ -37,9 +39,6 @@ def _required(name: str) -> str:
 class Settings:
     def __init__(self):
         self.port = int(os.environ.get("PORT", 8000))
-        self.data_dir = Path(os.environ.get("DATA_DIR", "./data"))
-        self.db_path = self.data_dir / "checkins.db"
-        self.uploads_dir = self.data_dir / "uploads"
         # Where the Points service is, and how long to wait for it. Never hardcoded.
         self.points_url = os.environ.get("POINTS_URL", "http://localhost:8001").rstrip("/")
         self.points_timeout_s = float(os.environ.get("POINTS_TIMEOUT_S", DEFAULT_TIMEOUT_S))
@@ -49,6 +48,11 @@ class Settings:
             for origin in os.environ.get("CORS_ORIGINS", DEFAULT_UI_ORIGIN).split(",")
             if origin.strip()
         ]
+
+    @property
+    def database_url(self) -> str:
+        """mssql+pymssql://user:password@host:1433/checkins: this service's own database only."""
+        return _required("DATABASE_URL")
 
     @property
     def auth_token_secret(self) -> str:

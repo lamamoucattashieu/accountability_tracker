@@ -140,7 +140,7 @@ def test_vote_on_missing_checkin_is_not_found(conn, bob):
 
 def test_vote_after_window_is_closed(conn, bob, checkin):
     posted = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat(timespec="seconds")
-    conn.execute("UPDATE checkins SET created_at = ? WHERE id = ?", (posted, checkin["id"]))
+    conn.execute("UPDATE checkins SET created_at = %s WHERE id = %s", (posted, checkin["id"]))
     with pytest.raises(service.VotingClosed):
         service.cast_rejection_vote(conn, bob, checkin["id"])
     assert repository.count_votes(conn, checkin["id"]) == 0

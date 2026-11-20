@@ -60,7 +60,7 @@ def seed(now: datetime) -> dict:
     """Create the demo crew relative to `now`; returns a short summary."""
     init_db()
     conn = get_connection()
-    if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+    if conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]:
         raise SystemExit("This DATA_DIR already has users. Point DATA_DIR at an empty folder to seed the demo.")
 
     this_week = week_begins_at(week_start_for(now))
@@ -75,12 +75,12 @@ def seed(now: datetime) -> dict:
     group = auth_service.create_group(conn, ids["maya"], "gym gremlins")
     for name in CREW[1:]:
         auth_service.join_group(conn, ids[name], group["invite_code"])
-    conn.execute("UPDATE groups SET created_at = ? WHERE id = ?", (iso(created), group["id"]))
-    conn.execute("UPDATE group_members SET joined_at = ? WHERE group_id = ?", (iso(created), group["id"]))
+    conn.execute("UPDATE groups SET created_at = %s WHERE id = %s", (iso(created), group["id"]))
+    conn.execute("UPDATE group_members SET joined_at = %s WHERE group_id = %s", (iso(created), group["id"]))
 
     def goal(owner, title, description, times_per_week):
         row = checkins_service.create_goal(conn, ids[owner], group["id"], title, description, times_per_week)
-        conn.execute("UPDATE goals SET created_at = ? WHERE id = ?", (iso(created), row["id"]))
+        conn.execute("UPDATE goals SET created_at = %s WHERE id = %s", (iso(created), row["id"]))
         return row["id"]
 
     goals = {
@@ -99,10 +99,10 @@ def seed(now: datetime) -> dict:
 
     def move_checkin(checkin_id, at):
         """Backdate the check-in and its queued completion, before the outbox delivers it."""
-        conn.execute("UPDATE checkins SET created_at = ? WHERE id = ?", (iso(at), checkin_id))
+        conn.execute("UPDATE checkins SET created_at = %s WHERE id = %s", (iso(at), checkin_id))
         conn.execute(
-            """UPDATE points_outbox SET payload = json_set(payload, '$.completed_at', ?)
-               WHERE checkin_id = ? AND kind = 'record' AND sent_at IS NULL""",
+            """UPDATE points_outbox SET payload = JSON_MODIFY(payload, '$.completed_at', %s)
+               WHERE checkin_id = %s AND kind = 'record' AND sent_at IS NULL""",
             (iso(at), checkin_id),
         )
 
@@ -174,10 +174,10 @@ def seed(now: datetime) -> dict:
 
     summary = {
         "users": len(CREW),
-        "checkins": conn.execute("SELECT COUNT(*) FROM checkins").fetchone()[0],
-        "rejected": conn.execute("SELECT COUNT(*) FROM checkins WHERE status = 'rejected'").fetchone()[0],
-        "comments": conn.execute("SELECT COUNT(*) FROM checkin_comments").fetchone()[0],
-        "points_delivered": conn.execute("SELECT COUNT(*) FROM points_outbox WHERE sent_at IS NOT NULL").fetchone()[0],
+        "checkins": conn.execute("SELECT COUNT(*) AS n FROM checkins").fetchone()["n"],
+        "rejected": conn.execute("SELECT COUNT(*) AS n FROM checkins WHERE status = 'rejected'").fetchone()["n"],
+        "comments": conn.execute("SELECT COUNT(*) AS n FROM checkin_comments").fetchone()["n"],
+        "points_delivered": conn.execute("SELECT COUNT(*) AS n FROM points_outbox WHERE sent_at IS NOT NULL").fetchone()["n"],
         "nudges": nudges,
     }
     conn.close()
