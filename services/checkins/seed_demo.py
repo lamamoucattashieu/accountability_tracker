@@ -1,6 +1,6 @@
-"""Checkins half of the demo: fill an empty DATA_DIR with a demo crew.
+"""Checkins half of the demo: fill an empty Checkins database with a demo crew.
 
-With both services running (Points needs an empty DATA_DIR too):
+With both services running (Points needs an empty database too):
     python seed_demo.py                       # here, in services/checkins
     python seed_demo.py                       # then in services/points
 and log in as maya / lockin-demo.
@@ -61,7 +61,7 @@ def seed(now: datetime) -> dict:
     init_db()
     conn = get_connection()
     if conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]:
-        raise SystemExit("This DATA_DIR already has users. Point DATA_DIR at an empty folder to seed the demo.")
+        raise SystemExit("This database already has users. Point DATABASE_URL at an empty database to seed the demo.")
 
     this_week = week_begins_at(week_start_for(now))
     last_week, two_ago, three_ago = this_week - WEEK, this_week - 2 * WEEK, this_week - 3 * WEEK

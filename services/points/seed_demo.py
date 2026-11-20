@@ -1,7 +1,7 @@
 """Points half of the demo: forfeits, settled weeks, proof and next week's forfeit.
 
 Run it after the Checkins half (services/checkins/seed_demo.py), with both
-services running and this service's DATA_DIR holding only what the Checkins
+services running and this service's database holding only what the Checkins
 half delivered:
     python seed_demo.py
 
@@ -61,7 +61,7 @@ def seed(now: datetime, group_id: int, ids: dict) -> dict:
     init_db()
     conn = get_connection()
     if conn.execute("SELECT COUNT(*) AS n FROM forfeits").fetchone()["n"]:
-        raise SystemExit("This DATA_DIR already has forfeits. Point DATA_DIR at a fresh folder to seed the demo.")
+        raise SystemExit("This database already has forfeits. Point DATABASE_URL at a fresh database to seed the demo.")
 
     this_week = week_begins_at(week_start_for(now))
     last_week, two_ago, three_ago = this_week - WEEK, this_week - 2 * WEEK, this_week - 3 * WEEK
