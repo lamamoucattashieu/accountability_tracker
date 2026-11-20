@@ -1,0 +1,10 @@
+# Allow-list: nothing reaches the build except what the Dockerfile copies.
+# A second guard after the COPY lines: .env, tests, .git and caches can never get in.
+*
+!main.py
+!app/
+!migrations/
+!requirements.txt
+!constraints.txt
+**/__pycache__
+**/*.pyc
