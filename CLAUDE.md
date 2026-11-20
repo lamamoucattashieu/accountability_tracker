@@ -235,6 +235,23 @@ came from. Never record a decision I didn't make.
 | `system.schema.json` | Phase 2 | Copied unchanged to the repo root now; the first `system.yaml` comes in Phase 3 with `docker-compose.yml` (its service names must match), validated by CI in Phase 4. It is a contract: every env var listed (defaults for all but secrets), service names = compose names, each cross-service call with its `METHOD /path`, `timeout_s` and `on_failure` |
 | Other service's URL default | Phase 2 | Stays `localhost` in the code; compose sets `POINTS_URL` / `CHECKINS_URL` |
 | Azure prefix | Phase 2 | IE username `lhvmoucattas.ieu2024`, prefix `lhvmoucattas-ieu2024` (container apps `lhvmoucattas-ieu2024-checkins` / `-points`, storage `lhvmoucattasieu2024ui`, all within the length limits) |
+| Base image | Phase 3 | `python:3.13.5-slim-bookworm` (exact tag, the version the code is tested on) |
+| Dependencies in the image | Phase 3 | Runtime `requirements.txt` only; test tools in `requirements-dev.txt`; every package pinned in `constraints.txt` (`pip freeze` inside the base image). Supersedes A1's single manifest with pytest |
+| Container start | Phase 3 | `CMD ["python", "main.py"]`, one process, non-root uid 10001 |
+| `GIT_SHA` | Phase 3 | Build argument baked into the image (`dev` locally, the commit in CD) |
+| Healthchecks | Phase 3 | sqlserver `sqlcmd SELECT 1` (up to ~10 min on a first start); both services `/health`; ui none; the smoke test waits up to 120 s |
+| Ports and passwords | Phase 3 | 8000, 8001, 5500→80, 1433; every password letters and digits only, 16+ characters |
+| db-init | Phase 3 | `sqlcmd` from the same pinned SQL Server image; passwords as env vars (sqlcmd variables), `sa` as `SQLCMDPASSWORD` |
+| Database logins | Phase 3 | Contained users `checkins_app` / `points_app` with exactly `db_ddladmin`, `db_datareader`, `db_datawriter` on their own database; password set again from `.env` on every run. Replaces "Databases before Phase 3" (by hand, as `sa`) |
+| Volume and restarts | Phase 3 | Named volume `sqlserver-data`; `unless-stopped` for everything but db-init (`no`) |
+| Pinned stock images | Phase 3 | SQL Server `2022-CU28-ubuntu-22.04`, nginx `1.29.8-alpine` |
+| SQL Server licence | Phase 3 | `ACCEPT_EULA=Y` committed in `docker-compose.yml`; the README says running it accepts Microsoft's licence (Developer edition) |
+| Test database | Phase 3 | `TEST_DATABASE_ADMIN_URL` points at the compose SQL Server; the Phase 2 container was removed |
+| Smoke test | Phase 3 | `e2e/test_smoke.py` at the repo root, run with `pytest e2e` on the running stack |
+| `system.yaml` values before Azure | Phase 3 | `public_url` `https://lhvmoucattasieu2024ui.z6.web.core.windows.net` (zone confirmed in Phase 5); registry `ghcr.io/lamamoucattashieu`; validated once with `check-jsonschema` in a throwaway environment (CI in Phase 4) |
+| OpenAPI files | Phase 3 | `services/<name>/openapi.json` (FastAPI writes JSON; spec 8a allows .json) |
+| Demo seed with compose | Phase 3 | Not in the images; run from the host against the published ports with each service's own login |
+| Apple Silicon | Phase 3 | README note: Rosetta in Docker Desktop; no `platform:` in compose |
 
 ---
 
