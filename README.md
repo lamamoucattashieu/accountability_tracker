@@ -23,51 +23,61 @@ in a group, and keeps the last answer so it can keep serving when Checkins is do
 
 ## Requirements
 
-- Python 3.13 (3.11+ should work)
-- Docker, for a local SQL Server (each service has its own database on it)
+- Docker (Docker Desktop on Windows or macOS). On a Mac with Apple Silicon, turn on "Use Rosetta
+  for x86_64/amd64 emulation" in Docker Desktop's settings: SQL Server only ships for amd64.
+- Python 3.13, only to run the tests, the demo seed or a single service outside Docker.
 
-## Setup and run (locally)
+## Running everything with Docker Compose
 
 ```bash
 git clone https://github.com/lamamoucattashieu/accountability_tracker.git
 cd accountability_tracker
-python -m venv .venv
-# Windows: .venv\Scripts\activate      macOS / Linux: source .venv/bin/activate
-pip install -r services/checkins/requirements.txt -r services/points/requirements.txt
+cp .env.example .env        # then replace every value (letters and digits, 16+ characters)
+docker compose up --build
 ```
 
-**1. A local SQL Server** (until Phase 3's docker-compose does this), with a password you choose:
+Open **http://localhost:5500/**. That starts:
+
+| Container | What it is | Port |
+|---|---|---|
+| `sqlserver` | SQL Server 2022, data in the `sqlserver-data` volume | 1433 |
+| `db-init` | runs [`db/init.sql`](db/init.sql) once and exits: the two databases and one login per service | |
+| `checkins` | the Checkins service, built from `services/checkins/Dockerfile` | 8000 |
+| `points` | the Points service, built from `services/points/Dockerfile` | 8001 |
+| `ui` | nginx serving `ui/` | 5500 |
+
+The very first start on an empty volume is slow (SQL Server creates its system databases; it took
+about 10 minutes here); later starts take seconds. Each service creates its own tables from its
+migrations when it starts. `docker compose down` keeps the data; only `docker compose down -v`
+deletes it. Running the stack accepts Microsoft's SQL Server licence (Developer edition,
+`ACCEPT_EULA` in `docker-compose.yml`).
+
+Every password and secret comes from `.env`, which is gitignored; `docker-compose.yml` reads them
+with `${NAME:?}` and refuses to start if one is missing. Each service connects with its own
+database login (`checkins_app`, `points_app`), which can only reach its own database; `sa` is used
+only by `db-init` and the tests.
+
+To see a service fail on its own: `docker compose stop points` (check-ins still work and show
+"points pending"; `docker compose start points` delivers them), or `docker compose stop checkins`
+(the scoreboard keeps answering from its last copy of the crew).
+
+## Running a single service outside Docker
+
+Useful while developing one service. Start only SQL Server and the logins with compose, then run
+the service from its folder with its own login (the passwords are the ones in your `.env`):
 
 ```bash
-docker run -d --name lockin-sqlserver -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=<your password>" \
-  -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+docker compose up -d db-init            # starts sqlserver, creates the databases and logins
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r services/checkins/requirements-dev.txt -c services/checkins/constraints.txt
+cd services/checkins
+export DATABASE_URL="mssql+pymssql://checkins_app:<CHECKINS_DB_PASSWORD>@localhost:1433/checkins"
+export AUTH_TOKEN_SECRET=<from .env> INTERNAL_API_KEY=<from .env>
+python main.py                          # http://localhost:8000; POINTS_URL defaults to localhost:8001
 ```
 
-Running it accepts Microsoft's SQL Server licence (the free Developer edition). Then create the
-two empty databases, `checkins` and `points` (for example with `sqlcmd` in the container:
-`CREATE DATABASE checkins; CREATE DATABASE points;`). Each service creates its own tables on
-startup from its migrations.
-
-**2. The secrets.** They have no default, so a service refuses to start without them. Use the
-same token secret and internal key in both services; each service gets its own database:
-
-```bash
-# macOS / Linux
-export AUTH_TOKEN_SECRET=local-dev-secret INTERNAL_API_KEY=local-dev-key
-# Windows PowerShell
-$env:AUTH_TOKEN_SECRET="local-dev-secret"; $env:INTERNAL_API_KEY="local-dev-key"
-```
-
-**3. Run each service with its own `DATABASE_URL`** (special characters in the password must be
-URL-encoded), and the UI:
-
-```bash
-cd services/checkins && DATABASE_URL="mssql+pymssql://sa:<password>@localhost:1433/checkins" python main.py   # :8000
-cd services/points && DATABASE_URL="mssql+pymssql://sa:<password>@localhost:1433/points" python main.py       # :8001
-python -m http.server 5500 -d ui            # from the repo root: the UI
-```
-
-Open **http://localhost:5500/**. API docs: http://localhost:8000/docs and http://localhost:8001/docs.
+Points is the same from `services/points`, with `points_app`, the `points` database and port 8001.
+Every setting is an environment variable (see Configuration).
 
 ## Database and migrations
 
@@ -86,17 +96,22 @@ the database gets a clear 503.
 
 ## Demo data (optional)
 
-With both services running on empty databases, seed the demo crew in two halves, each into its
-own service's database:
+On a fresh stack (`docker compose down -v`, then `docker compose up -d --build`), seed the demo
+crew in two halves from your Python environment, each into its own service's database through the
+published ports, with that service's own login:
 
 ```bash
-cd services/checkins && python seed_demo.py   # people, goals, check-ins, votes, comments, nudges
-cd services/points && python seed_demo.py     # forfeits, settled weeks, proof, next week's forfeit
+cd services/checkins
+DATABASE_URL="mssql+pymssql://checkins_app:<CHECKINS_DB_PASSWORD>@localhost:1433/checkins"   AUTH_TOKEN_SECRET=<from .env> INTERNAL_API_KEY=<from .env> python seed_demo.py
+cd ../points
+DATABASE_URL="mssql+pymssql://points_app:<POINTS_DB_PASSWORD>@localhost:1433/points"   AUTH_TOKEN_SECRET=<from .env> INTERNAL_API_KEY=<from .env> python seed_demo.py
 ```
 
-(with the same environment variables as when running each service). Log in as **`maya`** with
-password **`lockin-demo`** (`leo`, `zoe` and `sam` use the same password). Each half refuses to run
-on a database that already has data.
+The Checkins half (people, goals, check-ins, votes, comments, nudges) delivers its points to the
+running Points container; the Points half (forfeits, settled weeks, proof, next week's forfeit)
+finds the crew through Checkins' API. Log in as **`maya`** with password **`lockin-demo`** (`leo`,
+`zoe` and `sam` use the same password). Each half refuses to run on a database that already has
+data. The seed is a development tool: it isn't in the images.
 
 ## Configuration
 
@@ -139,17 +154,19 @@ is written to disk. [`system.schema.json`](system.schema.json) (provided by the 
 
 ## Tests and coverage
 
-The tests run against a real SQL Server, never Azure SQL: set `TEST_DATABASE_ADMIN_URL` to the
-local server's `master` database (for example `mssql+pymssql://sa:<password>@localhost:1433/master`,
-or put that line in the repository's `.env`, which is gitignored). Each run creates its own scratch
-databases and drops them at the end. Then, from each service's folder:
+The tests run against the compose SQL Server, never Azure SQL. Start it with
+`docker compose up -d sqlserver`; the tests read `TEST_DATABASE_ADMIN_URL` (its `master` database
+as `sa`, already in `.env.example`) and create their own scratch databases, which they drop at the
+end. Install the test tools with `requirements-dev.txt`, then:
 
 ```bash
-cd services/checkins && pytest --cov=app --cov-report=term-missing
+cd services/checkins && pytest --cov=app --cov-report=term-missing   # unit and integration tests
 cd services/points && pytest --cov=app --cov-report=term-missing
+docker compose up -d --build && pytest e2e                            # from the repo root: the smoke test
 ```
 
-Result: **checkins 260 tests, 99% of core logic; points 210 tests, 97% of core logic.**
+Result: **checkins 261 tests, 99% of core logic; points 211 tests, 97% of core logic; the smoke
+test passes on the stack.**
 
 - Unit tests (most of them): pure rules, and services against a scratch database built by the real
   migrations, emptied before each test. Each service's tests replace the other service with a fake.
@@ -160,6 +177,9 @@ Result: **checkins 260 tests, 99% of core logic; points 210 tests, 97% of core l
   CORS, and the HTTP clients against a stub server (`httpx.MockTransport`).
 - Integration tests across the seam (`services/checkins/tests/integration/`): both real services as
   separate processes on their own databases, including with one of them stopped.
+- One end-to-end smoke test ([`e2e/test_smoke.py`](e2e/test_smoke.py)) on the running compose
+  stack: nginx, both services, both databases and the call across the seam, the way a user reaches
+  them.
 
 The `routes.py` files are excluded from coverage (see [ADR-4](ADR.md)).
 
@@ -176,7 +196,12 @@ services/
   */app/shared/          small modules copied into both services: database connections and the
                          migration runner, health and request log, time and week rules, photo
                          checks, internal key and CORS
+  */Dockerfile           each service's image: only main.py, app/ and migrations/, as a non-root user
 ui/                      the static frontend: index.html, config.js, api.js, app.js, styles.css
+db/init.sql              the databases and one login per service, for the compose stack
+docker-compose.yml       the whole system locally: SQL Server, db-init, both services, nginx
+e2e/                     the end-to-end smoke test
+system.yaml              the system description (services, settings, calls, Azure names)
 system.schema.json       the course's schema for system.yaml
 ```
 

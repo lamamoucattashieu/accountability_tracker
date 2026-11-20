@@ -1,0 +1,5 @@
+# Everything to run the tests, on top of what the service needs to run.
+# Not installed in the image.
+-r requirements.txt
+pytest==9.1.1
+pytest-cov==7.1.0

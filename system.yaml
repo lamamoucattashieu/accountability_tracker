@@ -1,0 +1,73 @@
+# yaml-language-server: $schema=./system.schema.json
+# The whole system in one file (A2 spec 8a). It must match the code, docker-compose.yml and
+# the Azure deployment at the graded commit; CI validates it against system.schema.json.
+student: lhvmoucattas.ieu2024
+prefix: lhvmoucattas-ieu2024
+# The zone number (z6) is confirmed when the storage account is created in Phase 5.
+public_url: https://lhvmoucattasieu2024ui.z6.web.core.windows.net
+ui:
+  path: ui
+  storage_account: lhvmoucattasieu2024ui
+  calls: [checkins, points]
+azure:
+  resource_group: rg-lhvmoucattas-ieu2024
+  container_apps_environment: lhvmoucattas-ieu2024-env
+  sql_server: lhvmoucattas-ieu2024-sql
+  registry: ghcr.io/lamamoucattashieu
+services:
+  checkins:
+    description: Users, sessions and groups; goals, photo check-ins, rejection votes, comments and nudges.
+    path: services/checkins
+    openapi: services/checkins/openapi.json
+    port_default: 8000
+    health: /health
+    migrations: services/checkins/migrations
+    env:
+      PORT: { default: 8000, description: "Port the service listens on" }
+      DATABASE_URL: { secret: true, description: "Connection string of the checkins database: mssql+pymssql://user:password@host:1433/database" }
+      AUTH_TOKEN_SECRET: { secret: true, description: "Signs the access tokens; shared with points, which verifies them" }
+      INTERNAL_API_KEY: { secret: true, description: "Sent in X-Internal-Key on calls to points, and required on this service's /internal endpoints" }
+      POINTS_URL: { default: "http://localhost:8001", description: "Base URL of the points service" }
+      POINTS_TIMEOUT_S: { default: 2, description: "Timeout in seconds of every call to points" }
+      CORS_ORIGINS: { default: "http://localhost:5500", description: "The UI's origin(s), comma-separated: the only browser origins allowed" }
+      GIT_SHA: { default: dev, description: "The commit the image was built from, shown by /health" }
+    calls:
+      - service: points
+        url_env: POINTS_URL
+        endpoints: ["POST /internal/completions", "POST /internal/completions/{checkin_id}/revocation"]
+        timeout_s: 2
+        on_failure: >-
+          The check-in or rejection is still saved and marked "points pending"; its points
+          change waits in the outbox and is delivered in order on a later check-in, vote or
+          feed load.
+    azure:
+      container_app: lhvmoucattas-ieu2024-checkins
+      sql_database: lhvmoucattas-ieu2024-checkins-db
+  points:
+    description: Weekly scoring and leaderboard, forfeits, lazy week settlement and forfeit proof.
+    path: services/points
+    openapi: services/points/openapi.json
+    port_default: 8001
+    health: /health
+    migrations: services/points/migrations
+    env:
+      PORT: { default: 8001, description: "Port the service listens on" }
+      DATABASE_URL: { secret: true, description: "Connection string of the points database: mssql+pymssql://user:password@host:1433/database" }
+      AUTH_TOKEN_SECRET: { secret: true, description: "Verifies the access tokens issued by checkins" }
+      INTERNAL_API_KEY: { secret: true, description: "Sent in X-Internal-Key on calls to checkins, and required on this service's /internal endpoints" }
+      CHECKINS_URL: { default: "http://localhost:8000", description: "Base URL of the checkins service" }
+      CHECKINS_TIMEOUT_S: { default: 2, description: "Timeout in seconds of every call to checkins" }
+      CORS_ORIGINS: { default: "http://localhost:5500", description: "The UI's origin(s), comma-separated: the only browser origins allowed" }
+      GIT_SHA: { default: dev, description: "The commit the image was built from, shown by /health" }
+    calls:
+      - service: checkins
+        url_env: CHECKINS_URL
+        endpoints: ["GET /internal/groups/{group_id}"]
+        timeout_s: 2
+        on_failure: >-
+          Reads are served from the last snapshot of the group, marked as possibly out of
+          date; changes (setting a forfeit, uploading proof) get a clear 503 "try again", and
+          no week is settled until checkins answers again.
+    azure:
+      container_app: lhvmoucattas-ieu2024-points
+      sql_database: lhvmoucattas-ieu2024-points-db

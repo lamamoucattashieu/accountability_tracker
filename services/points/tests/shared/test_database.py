@@ -74,8 +74,18 @@ def test_a_wrong_password_is_not_retried():
     assert server.calls == 1
 
 
-def test_a_retryable_code_inside_a_db_lib_message_counts():
+def test_a_resuming_database_inside_a_db_lib_message_counts():
     assert database.is_retryable(pymssql.OperationalError(20018, b"... Msg 40613 ... not currently available"))
+
+
+def test_a_real_wrong_password_error_is_not_retryable():
+    """pymssql's actual text for a failed login also mentions DB-Lib 20002: the number decides."""
+    message = (
+        "Login failed for user 'checkins_app'.DB-Lib error message 20018, severity 14:" + chr(10)
+        + "General SQL Server error: Check messages from the SQL Server" + chr(10)
+        + "DB-Lib error message 20002, severity 9:" + chr(10) + "TDS server connection failed (localhost)"
+    )
+    assert not database.is_retryable(pymssql.OperationalError(18456, message.encode()))
 
 
 def test_startup_waits_double_up_to_the_cap_and_fit_the_budget():

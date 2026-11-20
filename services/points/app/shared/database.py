@@ -43,7 +43,10 @@ LOCK_TIMEOUT_MS = 5000
 # Errors that mean "not available yet, try again": 40613 database unavailable
 # (resuming), 40197/40501 service busy, 4060 cannot open the database yet,
 # 20002/20003/20009 pymssql (DB-Lib) connection failures and timeouts.
-RETRYABLE_ERRORS = {40613, 40197, 40501, 4060, 20002, 20003, 20009}
+SERVER_RETRYABLE_ERRORS = {40613, 40197, 40501, 4060}
+RETRYABLE_ERRORS = SERVER_RETRYABLE_ERRORS | {20002, 20003, 20009}
+# DB-Lib's generic "General SQL Server error": the server's own message is in the text.
+DB_LIB_GENERAL_ERROR = 20018
 # 2627 = UNIQUE or PRIMARY KEY constraint violated, 2601 = unique index violated.
 DUPLICATE_KEY_ERRORS = {2627, 2601}
 LOCK_TIMEOUT_ERROR = 1222
@@ -78,11 +81,13 @@ def error_number(exc: Exception):
 
 
 def is_retryable(exc: Exception) -> bool:
-    if error_number(exc) in RETRYABLE_ERRORS:
-        return True
-    # FreeTDS sometimes reports the server's message (e.g. 40613) inside a DB-Lib error.
-    text = str(exc)
-    return any(str(code) in text for code in RETRYABLE_ERRORS)
+    """Decided by the error number. A wrong password (18456) is never retried, even
+    though pymssql's text for it also mentions DB-Lib 20002."""
+    number = error_number(exc)
+    if number == DB_LIB_GENERAL_ERROR:
+        # Only the generic wrapper is read further: is the server's own error a "resuming" one?
+        return any(str(code) in str(exc) for code in SERVER_RETRYABLE_ERRORS)
+    return number in RETRYABLE_ERRORS
 
 
 def is_duplicate_key(exc: Exception, constraint: str = None) -> bool:
