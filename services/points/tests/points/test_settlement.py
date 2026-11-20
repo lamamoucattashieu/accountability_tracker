@@ -1,11 +1,11 @@
-import sqlite3
 import threading
+
+import pymssql
 from datetime import date, timedelta
 from itertools import count
 
 import pytest
 
-from app.config import settings
 from app.db import get_connection
 from app.points import repository, service
 from tests.factories import add_member, make_group, make_user, username_of
@@ -106,7 +106,7 @@ def test_single_member_group_has_no_loser(call, conn, people):
 def test_creation_week_settles_with_no_losers(call, conn, people, group):
     # A forfeit already locked for the creation week (2026-09-14), but nobody joined before it.
     conn.execute(
-        "INSERT INTO forfeits (group_id, text, set_by, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO forfeits (group_id, text, set_by, created_at) VALUES (%s, %s, %s, %s)",
         (group, "push-ups", people["ana"], "2026-09-13T10:00:00+00:00"),
     )
     score(conn, people["ana"], group, 1, day="2026-09-20T12:00:00+00:00")
@@ -193,14 +193,14 @@ def test_late_rejection_before_settlement_changes_the_loser(call, conn, people, 
 
 def counts(conn, group):
     settlements = conn.execute(
-        "SELECT COUNT(*) FROM settlements WHERE group_id = ?", (group,)
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS n FROM settlements WHERE group_id = %s", (group,)
+    ).fetchone()["n"]
     assignments = conn.execute(
-        """SELECT COUNT(*) FROM forfeit_assignments
+        """SELECT COUNT(*) AS n FROM forfeit_assignments
            JOIN settlements ON settlements.id = forfeit_assignments.settlement_id
-           WHERE settlements.group_id = ?""",
+           WHERE settlements.group_id = %s""",
         (group,),
-    ).fetchone()[0]
+    ).fetchone()["n"]
     return settlements, assignments
 
 
@@ -218,15 +218,9 @@ def test_unique_constraint_is_the_backstop(call, conn, people, group, forfeit, m
     score(conn, people["ana"], group, 2)
     conn.commit()
     call(service.ensure_settled, group, SETTLES)
-    real_get_settlement = repository.get_settlement
-
-    def blind_inside_transaction(conn, group_id, week):
-        # The pre-insert check (inside BEGIN IMMEDIATE) misses the existing row, as in a
-        # race; the check after the rollback sees the real table.
-        return None if conn.in_transaction else real_get_settlement(conn, group_id, week)
-
+    # Both checks miss the existing rows, as in a race: only UQ_settlements_group_week is left.
     monkeypatch.setattr(repository, "settled_week_starts", lambda conn, group_id: set())
-    monkeypatch.setattr(repository, "get_settlement", blind_inside_transaction)
+    monkeypatch.setattr(repository, "get_settlement", lambda conn, group_id, week: None)
     call(service.ensure_settled, group, SETTLES)  # hits UNIQUE, rolls back, no error
     monkeypatch.undo()
     assert counts(conn, group) == (3, 2)
@@ -258,11 +252,11 @@ def test_two_connections_racing_on_the_first_settlement(conn, people, group, for
     assert counts(conn, group) == (3, 2)
 
 
-def test_busy_timeout_becomes_settlement_busy_not_a_crash(people, group, forfeit):
+def test_lock_timeout_becomes_settlement_busy_not_a_crash(people, group, forfeit, monkeypatch):
     holder = get_connection()
-    holder.execute("BEGIN IMMEDIATE")  # another request is mid-write and holds the lock
-    impatient = sqlite3.connect(settings.db_path, timeout=0.1)
-    impatient.row_factory = sqlite3.Row
+    assert repository.lock_group_for_settlement(holder, group)  # another request is settling it
+    monkeypatch.setattr(repository, "LOCK_TIMEOUT_MS", 200)
+    impatient = get_connection()
     try:
         with pytest.raises(service.SettlementBusy):
             service.ensure_settled(impatient, group, SETTLES)
@@ -274,7 +268,7 @@ def test_busy_timeout_becomes_settlement_busy_not_a_crash(people, group, forfeit
 
 def test_settlement_refuses_to_start_inside_an_open_transaction(conn, people, group):
     conn.execute(  # uncommitted work
-        "INSERT INTO forfeits (group_id, text, set_by, created_at) VALUES (?, 'x', 1, '2026-09-20')", (group,)
+        "INSERT INTO forfeits (group_id, text, set_by, created_at) VALUES (%s, 'x', 1, '2026-09-20')", (group,)
     )
     with pytest.raises(RuntimeError):
         service.ensure_settled(conn, group, SETTLES)
@@ -334,9 +328,9 @@ def test_integrity_error_other_than_a_duplicate_week_is_not_swallowed(
     score(conn, people["ana"], group, 2)
 
     def broken_assignment(*args):
-        raise sqlite3.IntegrityError("CHECK constraint failed")
+        raise pymssql.IntegrityError(547, b"The INSERT statement conflicted with the CHECK constraint")
 
     monkeypatch.setattr(repository, "insert_assignment", broken_assignment)
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(pymssql.IntegrityError):
         call(service.ensure_settled, group, SETTLES)
     assert WEEK.isoformat() not in repository.settled_week_starts(conn, group)

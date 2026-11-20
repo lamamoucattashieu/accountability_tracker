@@ -1,7 +1,7 @@
 """Integration tests across the seam: both real services, over real HTTP.
 
 Each test starts Checkins and Points as separate processes (uvicorn) on free
-ports, with their own temporary DATA_DIRs, the way they run in production. They
+ports, each with its own scratch database, the way they run in production. They
 show the flows that cross the seam, and what happens when one service is
 stopped: the other keeps serving its own domain, and the cross-seam flow fails
 in the designed way (A2 spec 3).
@@ -19,6 +19,8 @@ import httpx
 import pytest
 from PIL import Image
 
+from tests import sqlserver
+
 SERVICES = Path(__file__).resolve().parents[3]  # .../services
 STARTUP_TIMEOUT_S = 20
 SECRETS = {"AUTH_TOKEN_SECRET": "integration-secret", "INTERNAL_API_KEY": "integration-key"}
@@ -31,17 +33,18 @@ def free_port() -> int:
 
 
 class Service:
-    """One service as a real process. stop() and start() keep its DATA_DIR."""
+    """One service as a real process. stop() and start() keep its database."""
 
-    def __init__(self, name, port, data_dir, env):
-        self.name, self.port, self.data_dir, self.env = name, port, data_dir, env
+    def __init__(self, name, port, env):
+        self.name, self.port, self.env = name, port, env
         self.url = f"http://127.0.0.1:{port}"
         self.process = None
 
     def start(self):
-        env = {**os.environ, **SECRETS, **self.env, "DATA_DIR": str(self.data_dir), "PORT": str(self.port)}
+        env = {**os.environ, **SECRETS, **self.env, "PORT": str(self.port)}
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(self.port)],
+            [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(self.port),
+             "--no-access-log"],
             cwd=SERVICES / self.name, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         deadline = time.monotonic() + STARTUP_TIMEOUT_S
@@ -62,17 +65,23 @@ class Service:
 
 
 @pytest.fixture
-def system(tmp_path):
+def system():
     checkins_port, points_port = free_port(), free_port()
-    checkins = Service("checkins", checkins_port, tmp_path / "checkins",
-                       {"POINTS_URL": f"http://127.0.0.1:{points_port}", "POINTS_TIMEOUT_S": "1"})
-    points = Service("points", points_port, tmp_path / "points",
-                     {"CHECKINS_URL": f"http://127.0.0.1:{checkins_port}", "CHECKINS_TIMEOUT_S": "1"})
+    checkins_db = sqlserver.create_database("test_seam_checkins")
+    points_db = sqlserver.create_database("test_seam_points")
+    checkins = Service("checkins", checkins_port, {
+        "DATABASE_URL": checkins_db,
+        "POINTS_URL": f"http://127.0.0.1:{points_port}", "POINTS_TIMEOUT_S": "1"})
+    points = Service("points", points_port, {
+        "DATABASE_URL": points_db,
+        "CHECKINS_URL": f"http://127.0.0.1:{checkins_port}", "CHECKINS_TIMEOUT_S": "1"})
     checkins.start()
     points.start()
     yield checkins, points
     checkins.stop()
     points.stop()
+    sqlserver.drop_database(checkins_db)
+    sqlserver.drop_database(points_db)
 
 
 def jpeg():

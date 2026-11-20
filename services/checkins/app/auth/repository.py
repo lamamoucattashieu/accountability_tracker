@@ -1,100 +1,75 @@
-CREATE_TABLES_SQL = """
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
+"""SQL for users, sessions and groups. The schema lives in migrations/001_init.sql."""
 
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    invite_code TEXT NOT NULL UNIQUE,
-    created_by INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS group_members (
-    group_id INTEGER NOT NULL REFERENCES groups(id),
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    joined_at TEXT NOT NULL,
-    PRIMARY KEY (group_id, user_id)
-);
-"""
-
-
-def create_tables(conn):
-    conn.executescript(CREATE_TABLES_SQL)
+from app.shared.database import is_duplicate_key
 
 
 def insert_user(conn, username, password_hash, created_at):
-    cur = conn.execute(
-        "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+    return conn.execute(
+        "INSERT INTO users (username, password_hash, created_at) OUTPUT INSERTED.id VALUES (%s, %s, %s)",
         (username, password_hash, created_at),
-    )
-    return cur.lastrowid
+    ).fetchone()["id"]
 
 
 def get_user_by_username(conn, username):
     return conn.execute(
-        "SELECT * FROM users WHERE username = ?", (username,)
+        "SELECT * FROM users WHERE username = %s", (username,)
     ).fetchone()
 
 
 def get_user_by_id(conn, user_id):
-    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return conn.execute("SELECT * FROM users WHERE id = %s", (user_id,)).fetchone()
 
 
 def insert_session(conn, session_id, user_id, created_at, expires_at):
     conn.execute(
         "INSERT INTO sessions (id, user_id, created_at, expires_at)"
-        " VALUES (?, ?, ?, ?)",
+        " VALUES (%s, %s, %s, %s)",
         (session_id, user_id, created_at, expires_at),
     )
 
 
 def get_session(conn, session_id):
     return conn.execute(
-        "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        "SELECT * FROM sessions WHERE id = %s", (session_id,)
     ).fetchone()
 
 
 def delete_session(conn, session_id):
-    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
 
 
 def insert_group(conn, name, invite_code, created_by, created_at):
-    cur = conn.execute(
+    return conn.execute(
         "INSERT INTO groups (name, invite_code, created_by, created_at)"
-        " VALUES (?, ?, ?, ?)",
+        " OUTPUT INSERTED.id VALUES (%s, %s, %s, %s)",
         (name, invite_code, created_by, created_at),
-    )
-    return cur.lastrowid
+    ).fetchone()["id"]
 
 
 def get_group_by_invite_code(conn, invite_code):
     return conn.execute(
-        "SELECT * FROM groups WHERE invite_code = ?", (invite_code,)
+        "SELECT * FROM groups WHERE invite_code = %s", (invite_code,)
     ).fetchone()
 
 
 def get_group_by_id(conn, group_id):
-    return conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+    return conn.execute("SELECT * FROM groups WHERE id = %s", (group_id,)).fetchone()
 
 
 def add_group_member(conn, group_id, user_id, joined_at):
-    conn.execute(
-        "INSERT OR IGNORE INTO group_members (group_id, user_id, joined_at)"
-        " VALUES (?, ?, ?)",
-        (group_id, user_id, joined_at),
-    )
+    """Joining a group you're already in changes nothing (the primary key says so).
+
+    A duplicate key fails only this statement; the rest of the request's
+    transaction carries on.
+    """
+    try:
+        conn.execute(
+            "INSERT INTO group_members (group_id, user_id, joined_at) VALUES (%s, %s, %s)",
+            (group_id, user_id, joined_at),
+        )
+    except Exception as exc:
+        if not is_duplicate_key(exc, "PK_group_members"):
+            raise
 
 
 def list_groups_for_user(conn, user_id):
@@ -102,7 +77,7 @@ def list_groups_for_user(conn, user_id):
         """
         SELECT groups.* FROM groups
         JOIN group_members ON group_members.group_id = groups.id
-        WHERE group_members.user_id = ?
+        WHERE group_members.user_id = %s
         ORDER BY groups.created_at
         """,
         (user_id,),
@@ -111,21 +86,21 @@ def list_groups_for_user(conn, user_id):
 
 def is_group_member(conn, group_id, user_id):
     row = conn.execute(
-        "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+        "SELECT 1 AS found FROM group_members WHERE group_id = %s AND user_id = %s",
         (group_id, user_id),
     ).fetchone()
     return row is not None
 
 
 def group_exists(conn, group_id):
-    row = conn.execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone()
+    row = conn.execute("SELECT 1 AS found FROM groups WHERE id = %s", (group_id,)).fetchone()
     return row is not None
 
 
 def count_group_members(conn, group_id):
     return conn.execute(
-        "SELECT COUNT(*) FROM group_members WHERE group_id = ?", (group_id,)
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS n FROM group_members WHERE group_id = %s", (group_id,)
+    ).fetchone()["n"]
 
 
 def list_group_members(conn, group_id):
@@ -133,7 +108,7 @@ def list_group_members(conn, group_id):
         """
         SELECT users.id, users.username, group_members.joined_at FROM group_members
         JOIN users ON users.id = group_members.user_id
-        WHERE group_members.group_id = ?
+        WHERE group_members.group_id = %s
         ORDER BY users.id
         """,
         (group_id,),

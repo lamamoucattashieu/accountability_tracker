@@ -1,78 +1,8 @@
-from app.config import COMMENT_MAX_LENGTH, NUDGE_MAX_LENGTH
+"""SQL for goals, check-ins, votes, comments, nudges and the points outbox.
 
-CREATE_TABLES_SQL = """
-CREATE TABLE IF NOT EXISTS goals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL REFERENCES groups(id),
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    title TEXT NOT NULL,
-    description TEXT,
-    times_per_week INTEGER NOT NULL CHECK (times_per_week BETWEEN 1 AND 7),
-    created_at TEXT NOT NULL,
-    archived_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS checkins (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    goal_id INTEGER NOT NULL REFERENCES goals(id),
-    photo_path TEXT NOT NULL,
-    caption TEXT,
-    status TEXT NOT NULL DEFAULT 'accepted' CHECK (status IN ('accepted', 'rejected')),
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS checkin_votes (
-    checkin_id INTEGER NOT NULL REFERENCES checkins(id),
-    voter_id INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL,
-    UNIQUE (checkin_id, voter_id)
-);
-
-CREATE TABLE IF NOT EXISTS checkin_comments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    checkin_id INTEGER NOT NULL REFERENCES checkins(id),
-    author_id INTEGER NOT NULL REFERENCES users(id),
-    text TEXT NOT NULL CHECK (length(text) BETWEEN 1 AND {COMMENT_MAX_LENGTH}),
-    created_at TEXT NOT NULL
-);
-
--- One nudge per person, per nudger, per UTC day: UNIQUE makes spamming impossible.
-CREATE TABLE IF NOT EXISTS nudges (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL REFERENCES groups(id),
-    nudger_id INTEGER NOT NULL REFERENCES users(id),
-    nudged_id INTEGER NOT NULL REFERENCES users(id),
-    message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND {NUDGE_MAX_LENGTH}),
-    day TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE (group_id, nudger_id, nudged_id, day),
-    CHECK (nudger_id != nudged_id)
-);
-
--- Transactional outbox: a points change for the Points service, written in the
--- same transaction as the check-in or rejection it belongs to, and delivered
--- afterwards. Pending = neither sent nor failed. The payload is stored as it was
--- at write time, so a goal edited later can't change how the check-in scores.
-CREATE TABLE IF NOT EXISTS points_outbox (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL CHECK (kind IN ('record', 'revoke')),
-    checkin_id INTEGER NOT NULL REFERENCES checkins(id),
-    group_id INTEGER NOT NULL REFERENCES groups(id),
-    payload TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    sent_at TEXT,
-    failed_at TEXT,
-    last_error TEXT
-);
+The schema lives in migrations/001_init.sql. Every value is passed as a
+parameter (%s), never formatted into the SQL: no SQL injection.
 """
-
-
-def create_tables(conn):
-    # The comment length limit comes from config.py, so it isn't a duplicated magic number.
-    conn.executescript(
-        CREATE_TABLES_SQL.replace("{COMMENT_MAX_LENGTH}", str(COMMENT_MAX_LENGTH))
-        .replace("{NUDGE_MAX_LENGTH}", str(NUDGE_MAX_LENGTH))
-    )
 
 
 def insert_goal(conn, group_id, user_id, title, description, times_per_week, created_at):
@@ -80,22 +10,23 @@ def insert_goal(conn, group_id, user_id, title, description, times_per_week, cre
         """
         INSERT INTO goals
             (group_id, user_id, title, description, times_per_week, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        OUTPUT INSERTED.id
+        VALUES (%s, %s, %s, %s, %s, %s)
         """,
         (group_id, user_id, title, description, times_per_week, created_at),
     )
-    return cur.lastrowid
+    return cur.fetchone()["id"]
 
 
 def get_goal_by_id(conn, goal_id):
-    return conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+    return conn.execute("SELECT * FROM goals WHERE id = %s", (goal_id,)).fetchone()
 
 
 def list_active_goals_for_group(conn, group_id):
     return conn.execute(
         """
         SELECT * FROM goals
-        WHERE group_id = ? AND archived_at IS NULL
+        WHERE group_id = %s AND archived_at IS NULL
         ORDER BY created_at, id
         """,
         (group_id,),
@@ -105,8 +36,8 @@ def list_active_goals_for_group(conn, group_id):
 def update_goal(conn, goal_id, title, description, times_per_week):
     conn.execute(
         """
-        UPDATE goals SET title = ?, description = ?, times_per_week = ?
-        WHERE id = ?
+        UPDATE goals SET title = %s, description = %s, times_per_week = %s
+        WHERE id = %s
         """,
         (title, description, times_per_week, goal_id),
     )
@@ -114,63 +45,72 @@ def update_goal(conn, goal_id, title, description, times_per_week):
 
 def set_archived_at(conn, goal_id, archived_at):
     conn.execute(
-        "UPDATE goals SET archived_at = ? WHERE id = ?", (archived_at, goal_id)
+        "UPDATE goals SET archived_at = %s WHERE id = %s", (archived_at, goal_id)
     )
 
 
-def insert_checkin(conn, goal_id, photo_path, caption, created_at):
+def insert_checkin(conn, goal_id, photo, photo_type, caption, created_at):
     cur = conn.execute(
         """
-        INSERT INTO checkins (goal_id, photo_path, caption, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO checkins (goal_id, photo, photo_type, caption, created_at)
+        OUTPUT INSERTED.id
+        VALUES (%s, %s, %s, %s, %s)
         """,
-        (goal_id, photo_path, caption, created_at),
+        (goal_id, photo, photo_type, caption, created_at),
     )
-    return cur.lastrowid
+    return cur.fetchone()["id"]
 
 
-# Joining goals is fine here: both tables belong to this domain.
+# Joining goals is fine here: both tables belong to this domain. The photo
+# column is never selected here: only get_checkin_photo reads the bytes.
 CHECKIN_WITH_GOAL_SQL = """
-    SELECT checkins.*, goals.group_id, goals.user_id, goals.title AS goal_title,
+    SELECT checkins.id, checkins.goal_id, checkins.caption, checkins.status, checkins.created_at,
+           goals.group_id, goals.user_id, goals.title AS goal_title,
            (SELECT COUNT(*) FROM checkin_comments
             WHERE checkin_comments.checkin_id = checkins.id) AS comment_count,
-           EXISTS (SELECT 1 FROM points_outbox
-                   WHERE points_outbox.checkin_id = checkins.id
-                     AND points_outbox.sent_at IS NULL
-                     AND points_outbox.failed_at IS NULL) AS points_pending
+           CASE WHEN EXISTS (SELECT 1 FROM points_outbox
+                             WHERE points_outbox.checkin_id = checkins.id
+                               AND points_outbox.sent_at IS NULL
+                               AND points_outbox.failed_at IS NULL)
+                THEN 1 ELSE 0 END AS points_pending
     FROM checkins
     JOIN goals ON goals.id = checkins.goal_id
 """
 
 
+def get_checkin_photo(conn, checkin_id):
+    return conn.execute(
+        "SELECT photo, photo_type FROM checkins WHERE id = %s", (checkin_id,)
+    ).fetchone()
+
+
 def get_checkin(conn, checkin_id):
     return conn.execute(
-        CHECKIN_WITH_GOAL_SQL + " WHERE checkins.id = ?", (checkin_id,)
+        CHECKIN_WITH_GOAL_SQL + " WHERE checkins.id = %s", (checkin_id,)
     ).fetchone()
 
 
 def list_checkins_for_group(conn, group_id, limit):
     return conn.execute(
-        CHECKIN_WITH_GOAL_SQL
+        CHECKIN_WITH_GOAL_SQL.replace("SELECT", "SELECT TOP (%s)", 1)
         + """
-        WHERE goals.group_id = ?
+        WHERE goals.group_id = %s
         ORDER BY checkins.created_at DESC, checkins.id DESC
-        LIMIT ?
         """,
-        (group_id, limit),
+        (limit, group_id),
     ).fetchall()
 
 
 def insert_vote(conn, checkin_id, voter_id, created_at):
     conn.execute(
-        "INSERT INTO checkin_votes (checkin_id, voter_id, created_at) VALUES (?, ?, ?)",
+        "INSERT INTO checkin_votes (checkin_id, voter_id, created_at) VALUES (%s, %s, %s)",
         (checkin_id, voter_id, created_at),
     )
 
 
 def has_voted(conn, checkin_id, voter_id):
     row = conn.execute(
-        "SELECT 1 FROM checkin_votes WHERE checkin_id = ? AND voter_id = ?",
+        "SELECT 1 AS found FROM checkin_votes WHERE checkin_id = %s AND voter_id = %s",
         (checkin_id, voter_id),
     ).fetchone()
     return row is not None
@@ -178,14 +118,14 @@ def has_voted(conn, checkin_id, voter_id):
 
 def count_votes(conn, checkin_id):
     return conn.execute(
-        "SELECT COUNT(*) FROM checkin_votes WHERE checkin_id = ?", (checkin_id,)
-    ).fetchone()[0]
+        "SELECT COUNT(*) AS n FROM checkin_votes WHERE checkin_id = %s", (checkin_id,)
+    ).fetchone()["n"]
 
 
 def mark_rejected(conn, checkin_id):
     """Flip accepted -> rejected. Returns True only for the call that actually flipped it."""
     cur = conn.execute(
-        "UPDATE checkins SET status = 'rejected' WHERE id = ? AND status = 'accepted'",
+        "UPDATE checkins SET status = 'rejected' WHERE id = %s AND status = 'accepted'",
         (checkin_id,),
     )
     return cur.rowcount == 1
@@ -193,17 +133,18 @@ def mark_rejected(conn, checkin_id):
 
 def insert_comment(conn, checkin_id, author_id, text, created_at):
     cur = conn.execute(
-        "INSERT INTO checkin_comments (checkin_id, author_id, text, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO checkin_comments (checkin_id, author_id, text, created_at)"
+        " OUTPUT INSERTED.id VALUES (%s, %s, %s, %s)",
         (checkin_id, author_id, text, created_at),
     )
-    return cur.lastrowid
+    return cur.fetchone()["id"]
 
 
 def list_comments(conn, checkin_id):
     return conn.execute(
         """
         SELECT id, checkin_id, author_id, text, created_at FROM checkin_comments
-        WHERE checkin_id = ?
+        WHERE checkin_id = %s
         ORDER BY created_at, id
         """,
         (checkin_id,),
@@ -220,9 +161,9 @@ def goal_progress(conn, group_id, since):
                (SELECT COUNT(*) FROM checkins
                 WHERE checkins.goal_id = goals.id
                   AND checkins.status = 'accepted'
-                  AND checkins.created_at >= ?) AS done
+                  AND checkins.created_at >= %s) AS done
         FROM goals
-        WHERE goals.group_id = ? AND goals.archived_at IS NULL
+        WHERE goals.group_id = %s AND goals.archived_at IS NULL
         """,
         (since, group_id),
     ).fetchall()
@@ -233,7 +174,7 @@ def users_who_posted_since(conn, group_id, since):
         """
         SELECT DISTINCT goals.user_id FROM checkins
         JOIN goals ON goals.id = checkins.goal_id
-        WHERE goals.group_id = ? AND checkins.created_at >= ?
+        WHERE goals.group_id = %s AND checkins.created_at >= %s
         """,
         (group_id, since),
     ).fetchall()
@@ -244,16 +185,17 @@ def insert_nudge(conn, group_id, nudger_id, nudged_id, message, day, created_at)
     cur = conn.execute(
         """
         INSERT INTO nudges (group_id, nudger_id, nudged_id, message, day, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        OUTPUT INSERTED.id
+        VALUES (%s, %s, %s, %s, %s, %s)
         """,
         (group_id, nudger_id, nudged_id, message, day, created_at),
     )
-    return cur.lastrowid
+    return cur.fetchone()["id"]
 
 
 def nudges_sent_on(conn, group_id, nudger_id, day):
     rows = conn.execute(
-        "SELECT nudged_id FROM nudges WHERE group_id = ? AND nudger_id = ? AND day = ?",
+        "SELECT nudged_id FROM nudges WHERE group_id = %s AND nudger_id = %s AND day = %s",
         (group_id, nudger_id, day),
     ).fetchall()
     return {row["nudged_id"] for row in rows}
@@ -263,7 +205,7 @@ def nudges_received_on(conn, group_id, nudged_id, day):
     return conn.execute(
         """
         SELECT id, nudger_id, message, created_at FROM nudges
-        WHERE group_id = ? AND nudged_id = ? AND day = ?
+        WHERE group_id = %s AND nudged_id = %s AND day = %s
         ORDER BY created_at, id
         """,
         (group_id, nudged_id, day),
@@ -276,7 +218,7 @@ def insert_outbox(conn, kind, checkin_id, group_id, payload, created_at):
     conn.execute(
         """
         INSERT INTO points_outbox (kind, checkin_id, group_id, payload, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
         """,
         (kind, checkin_id, group_id, payload, created_at),
     )
@@ -286,36 +228,34 @@ def pending_outbox(conn, limit):
     """Oldest first, so a check-in's revoke is never sent before its record."""
     return conn.execute(
         """
-        SELECT * FROM points_outbox
+        SELECT TOP (%s) * FROM points_outbox
         WHERE sent_at IS NULL AND failed_at IS NULL
         ORDER BY id
-        LIMIT ?
         """,
         (limit,),
     ).fetchall()
 
 
 def mark_outbox_sent(conn, outbox_id, sent_at):
-    conn.execute("UPDATE points_outbox SET sent_at = ? WHERE id = ?", (sent_at, outbox_id))
+    conn.execute("UPDATE points_outbox SET sent_at = %s WHERE id = %s", (sent_at, outbox_id))
 
 
 def mark_outbox_failed(conn, outbox_id, failed_at, error):
     conn.execute(
-        "UPDATE points_outbox SET failed_at = ?, last_error = ? WHERE id = ?",
+        "UPDATE points_outbox SET failed_at = %s, last_error = %s WHERE id = %s",
         (failed_at, error, outbox_id),
     )
 
 
 def note_outbox_error(conn, outbox_id, error):
-    conn.execute("UPDATE points_outbox SET last_error = ? WHERE id = ?", (error, outbox_id))
+    conn.execute("UPDATE points_outbox SET last_error = %s WHERE id = %s", (error, outbox_id))
 
 
 def group_has_pending_outbox(conn, group_id):
     row = conn.execute(
         """
-        SELECT 1 FROM points_outbox
-        WHERE group_id = ? AND sent_at IS NULL AND failed_at IS NULL
-        LIMIT 1
+        SELECT TOP 1 1 AS pending FROM points_outbox
+        WHERE group_id = %s AND sent_at IS NULL AND failed_at IS NULL
         """,
         (group_id,),
     ).fetchone()

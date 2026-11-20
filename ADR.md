@@ -18,7 +18,7 @@ Consequences: A future split mostly changes the seam functions, plus dropping th
 
 ## 3. Data model: soft-archived goals, and a points ledger linked to check-ins by id only
 Date: 2026-10-01
-Status: Decided
+Status: Superseded by 7
 Context: Check-ins and their points must keep pointing at the goal and check-in they came from even after a goal is archived or a check-in is rejected, and there is no migration tool, so columns later phases need must exist from the start. Points also needs per-check-in data without reading the check-ins tables (ADR-2).
 Decision: Goals are soft-archived (archived_at), and a check-in stores only goal_id, a photo path relative to DATA_DIR and a status column for voting, with its group and owner derived by a same-domain JOIN. Points keeps a ledger, point_events, with one row per check-in (UNIQUE checkin_id, revoked_at on rejection) that holds other domains' ids without foreign keys, and weekly scores and streak bonuses are computed from it in SQL rather than stored; only a settled week is stored (settlements, forfeit_assignments), because it must not change once final.
 Alternatives considered: Hard-deleting goals with ON DELETE CASCADE, rejected because it would erase check-ins and their points. Storing weekly totals per member, rejected because incrementing is not idempotent and a rejection could not free a capped slot, rescore a past week or end a streak without recounting. Foreign keys from point_events to check-ins, rejected because they tie Points to the check-ins schema and would have to be dropped in a split.
@@ -166,3 +166,11 @@ Context: A2 requires one service per domain, each with its own database, talking
 Decision: The seam stayed where ADR-2 put it, and Checkins still calls Points. Auth moved into Checkins because it checks membership on nearly every request. Points changes go through a transactional outbox delivered to idempotent endpoints. Points reads membership through one call per request, cached as a snapshot, and verifies signed tokens itself.
 Alternatives considered: Points validating each request with Checkins. Rejected because Points could then serve nothing while Checkins is down. Auth inside Points was rejected because most Checkins requests would then cross the seam.
 Consequences: Each user-visible flow makes at most one call across the seam. Either service keeps serving its own domain when the other is down. The leaderboard is eventually consistent, and a logged-out token stays valid in Points until it expires.
+
+## 7. Data and migrations: one SQL Server database per service, schema only in versioned migrations
+Date: 2026-11-20
+Status: Decided
+Context: The split gives each service its own database, and A2 moves from SQLite to SQL Server (Azure SQL serverless). A1 created its schema on startup and kept photos as files, neither of which works for a database that already holds data or for containers without a disk.
+Decision: Each service has its own database and DATABASE_URL, and its schema exists only in numbered SQL migrations. A small runner of our own applies each one in its own transaction, records it with a checksum, and refuses an edited one. Photos are stored in the row they belong to. Integrity across the seam is kept in code by the idempotent outbox and receiver (ADR-6). Within a service, foreign keys, CHECK and UNIQUE constraints still guard every rule.
+Alternatives considered: Alembic with SQLAlchemy was rejected because it adds two packages and its generated migrations hide the SQL. Typed DATETIMEOFFSET timestamps were rejected for now because they would change every read and response, while ISO UTC strings keep A1's behaviour.
+Consequences: Recovery from a bad migration is forward-only. A migration that fails rolls itself back, and the service won't start until a corrected new migration replaces it. One that succeeded but was wrong is fixed with another migration, using Azure SQL's point-in-time restore if data was lost. Every connection retries while a paused database resumes.

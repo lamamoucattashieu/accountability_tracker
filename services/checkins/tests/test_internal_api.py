@@ -13,7 +13,7 @@ INTERNAL = {"X-Internal-Key": TEST_INTERNAL_KEY}
 
 
 @pytest.fixture
-def api(data_dir):
+def api(db):
     # No "with": the startup hook would plug in the real Points client.
     return TestClient(app)
 

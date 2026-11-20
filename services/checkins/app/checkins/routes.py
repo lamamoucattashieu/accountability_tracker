@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.auth.routes import get_current_user
@@ -20,7 +20,6 @@ STATUS_CODES = {
     service.GoalArchived: 409,
     service.InvalidGoal: 422,
     service.CheckinNotFound: 404,
-    service.PhotoMissing: 404,
     service.InvalidCheckin: 422,
     service.CannotVoteOwnCheckin: 403,
     service.CheckinAlreadyRejected: 409,
@@ -113,9 +112,8 @@ def archive_goal(goal_id: int, user=Depends(get_current_user)):
 
 
 def _checkin_response(checkin) -> dict:
-    """The stored photo path is internal; clients get a URL behind the access check."""
+    """The photo itself isn't in the response; clients get a URL behind the access check."""
     response = dict(checkin)
-    del response["photo_path"]
     response["photo_url"] = f"/checkins/{checkin['id']}/photo"
     response["points_pending"] = bool(checkin["points_pending"])
     return response
@@ -160,10 +158,10 @@ def list_checkins(group_id: int, user=Depends(get_current_user)):
 def get_checkin_photo(checkin_id: int, user=Depends(get_current_user)):
     with get_db() as conn:
         try:
-            path = service.get_checkin_photo_path(conn, user["id"], checkin_id)
+            photo, photo_type = service.get_checkin_photo(conn, user["id"], checkin_id)
         except HANDLED_ERRORS as exc:
             raise _to_http_error(exc)
-    return FileResponse(path)
+    return Response(content=photo, media_type=photo_type)
 
 
 @router.post("/checkins/{checkin_id}/votes", status_code=201, tags=["checkins"])

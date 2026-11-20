@@ -1,6 +1,5 @@
 import os
 from datetime import timedelta
-from pathlib import Path
 
 # Business rules of Points & Forfeits.
 # VOTING_WINDOW must equal Checkins' VOTING_WINDOW (services/checkins/app/config.py):
@@ -11,6 +10,7 @@ from pathlib import Path
 VOTING_WINDOW = timedelta(hours=48)
 SETTLEMENT_DELAY = VOTING_WINDOW
 PROOF_DEADLINE = timedelta(days=7)
+# Length limit: migrations/001_init.sql holds the same number (a test compares them).
 FORFEIT_MAX_LENGTH = 200
 
 # Every call to the other service gives up after this long (A2 spec 3).
@@ -19,7 +19,8 @@ DEFAULT_TIMEOUT_S = 2.0
 DEFAULT_UI_ORIGIN = "http://localhost:5500"
 
 # Secrets have no default (A2 spec 8a): the service refuses to start without them.
-REQUIRED_SECRETS = ("AUTH_TOKEN_SECRET", "INTERNAL_API_KEY")
+# DATABASE_URL holds the database password, so it is a secret too.
+REQUIRED_SECRETS = ("DATABASE_URL", "AUTH_TOKEN_SECRET", "INTERNAL_API_KEY")
 
 
 class MissingSecret(RuntimeError):
@@ -36,9 +37,8 @@ def _required(name: str) -> str:
 class Settings:
     def __init__(self):
         self.port = int(os.environ.get("PORT", 8001))
-        self.data_dir = Path(os.environ.get("DATA_DIR", "./data"))
-        self.db_path = self.data_dir / "points.db"
-        self.uploads_dir = self.data_dir / "uploads"
+        # The commit the running code was built from, shown by /health. Set at build time.
+        self.git_sha = os.environ.get("GIT_SHA", "dev")
         # Where the Checkins service is, and how long to wait for it. Never hardcoded.
         self.checkins_url = os.environ.get("CHECKINS_URL", "http://localhost:8000").rstrip("/")
         self.checkins_timeout_s = float(os.environ.get("CHECKINS_TIMEOUT_S", DEFAULT_TIMEOUT_S))
@@ -48,6 +48,11 @@ class Settings:
             for origin in os.environ.get("CORS_ORIGINS", DEFAULT_UI_ORIGIN).split(",")
             if origin.strip()
         ]
+
+    @property
+    def database_url(self) -> str:
+        """mssql+pymssql://user:password@host:1433/points: this service's own database only."""
+        return _required("DATABASE_URL")
 
     @property
     def auth_token_secret(self) -> str:
