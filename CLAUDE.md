@@ -175,9 +175,7 @@ not found, 409 conflicts with current state (duplicate vote, already settled), 4
 routes translate them. No bare 400s or 500s for expected cases.
 
 ### Still open (ask me before building)
-- Migration approach (numbered SQL files with our own runner, or Alembic) and infrastructure
-  definition (Azure CLI in the workflow, or Bicep/Terraform)
-- How existing A1 SQLite data reaches the new databases, if at all
+- Infrastructure definition (Azure CLI in the workflow, or Bicep/Terraform)
 
 ---
 
@@ -216,6 +214,27 @@ came from. Never record a decision I didn't make.
 | ADR statuses | Phase 1 | ADR-2 → Superseded by 6 now, ADR-3 → by 7 in Phase 2, ADR-4 → by 9 in Phase 4 |
 | Usernames across the seam | Phase 1 | Points returns user ids only; the UI shows names from Checkins' `/groups/{id}/members`, like the feed |
 | Internal API contract | Phase 1 | `POST /internal/completions`, `POST /internal/completions/{checkin_id}/revocation` (with `revoked_at` from Checkins), `GET /internal/groups/{id}`, all as built |
+| SQL Server driver | Phase 2 | `pymssql==2.4.6` (bundles FreeTDS, no system driver); `DATABASE_URL` = `mssql+pymssql://user:password@host:1433/database`, parsed with `urllib`, a secret with no default |
+| Timestamps in SQL Server | Phase 2 | ISO 8601 UTC strings in `NVARCHAR(32)`, as in A1; `week_start` CHECK is a Monday via `DATEDIFF` from 1900-01-01, independent of `DATEFIRST` |
+| Usernames | Phase 2 | `NVARCHAR(50)` with `USERNAME_MAX_LENGTH = 50` (422 above); usernames and invite codes stay case-sensitive (`Latin1_General_100_CS_AS`) |
+| Idempotent inserts | Phase 2 | Plain INSERT; a duplicate key on the named constraint means "already done"; CHECK violations still raise |
+| Settlement race | Phase 2 | `sp_getapplock` per group in the transaction; lock timeout → `SettlementBusy`; `UQ_settlements_group_week` stays the backstop |
+| Open-transaction guard | Phase 2 | The connection wrapper records unsaved writes (`in_transaction`) |
+| Placeholders | Phase 2 | `%s` / `%(name)s` written out in every query |
+| Migrations | Phase 2 | Numbered SQL files with our own runner: each in its own transaction with its `schema_migrations` row; SHA-256 checksum (line endings normalised) refuses an edited applied file; `sp_getapplock` stops two copies |
+| Connection retry | Phase 2 | Only connecting is retried, never a query. Retryable: 40613, 40197, 40501, 4060, 20002, 20003, 20009. Requests wait 0.5/1/2/4/8 s then 503; startup up to 120 s then exits; 5 s per attempt |
+| Lock timeout | Phase 2 | 5 s on every connection |
+| `/health` | Phase 2 | Reads `schema_migrations`, updates and commits the one `service_health` row; one 3 s attempt, no retry; version from `GIT_SHA` (default `dev`) |
+| Request log | Phase 2 | One JSON line per request (service, method, path, status, duration_ms) via `print`; no query string, headers or bodies; uvicorn's access log off |
+| Photos | Phase 2 | `VARBINARY(MAX)` + type column in the owning row, never selected by list queries. Replaces the Phase 1 "files until Phase 2" entry; A1's `PhotoMissing`, orphan-file cleanup and `DATA_DIR` are gone. Limits in the SQL file are literals, compared with the config constants by a test |
+| Test database | Phase 2 | Local SQL Server container; one migrated scratch database per run per service, tables wiped and ids reset before each test; `TEST_DATABASE_ADMIN_URL` (or the gitignored `.env`); database tests fail, never skip |
+| Demo seed | Phase 2 | Same two halves on SQL Server, ported together with each service |
+| Databases before Phase 3 | Phase 2 | Created by hand on the local container and used as `sa`, until `db/init.sql` and per-service logins in Phase 3 |
+| A1 data | Phase 2 | Not imported: fresh databases plus the seed |
+| Shared database code | Phase 2 | `database.py`, `migrations.py` and `observability.py` copied identically into both services |
+| `system.schema.json` | Phase 2 | Copied unchanged to the repo root now; the first `system.yaml` comes in Phase 3 with `docker-compose.yml` (its service names must match), validated by CI in Phase 4. It is a contract: every env var listed (defaults for all but secrets), service names = compose names, each cross-service call with its `METHOD /path`, `timeout_s` and `on_failure` |
+| Other service's URL default | Phase 2 | Stays `localhost` in the code; compose sets `POINTS_URL` / `CHECKINS_URL` |
+| Azure prefix | Phase 2 | IE username `lhvmoucattas.ieu2024`, prefix `lhvmoucattas-ieu2024` (container apps `lhvmoucattas-ieu2024-checkins` / `-points`, storage `lhvmoucattasieu2024ui`, all within the length limits) |
 
 ---
 
