@@ -1,0 +1,113 @@
+# The whole system on one machine: docker compose up --build (from a clean clone, after
+# copying .env.example to .env and filling it in).
+#
+# Start order: sqlserver (healthy) -> db-init (finished) -> checkins, points. ui waits for
+# nothing: it is static files. depends_on only orders the start; each service still retries
+# its own database connection, and the two services never wait for each other, so stopping
+# one leaves the other running (fault isolation).
+#
+# Every password and secret comes from .env (${NAME:?} stops compose if one is missing):
+# none is written in this file. Running it accepts Microsoft's SQL Server licence
+# (ACCEPT_EULA, Developer edition).
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+    ports:
+      - "1433:1433"  # for the tests and the demo seed, run from the host
+    volumes:
+      - sqlserver-data:/var/opt/mssql  # survives "down"; only "down -v" deletes it
+    healthcheck:
+      # $$: the variable is read inside the container, not by compose.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q \"SELECT 1\" -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      # The very first start on an empty volume creates SQL Server's system databases,
+      # which took about 10 minutes here: allow that before calling it unhealthy.
+      retries: 60
+      start_period: 60s
+    restart: unless-stopped
+
+  # One-off job: runs db/init.sql (databases and one login per service), then exits.
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04
+    entrypoint: ["/opt/mssql-tools18/bin/sqlcmd"]
+    command: ["-S", "sqlserver", "-U", "sa", "-C", "-b", "-i", "/db/init.sql"]
+    environment:
+      SQLCMDPASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}  # read by sqlcmd, never on its command line
+      CHECKINS_DB_PASSWORD: ${CHECKINS_DB_PASSWORD:?set CHECKINS_DB_PASSWORD in .env}
+      POINTS_DB_PASSWORD: ${POINTS_DB_PASSWORD:?set POINTS_DB_PASSWORD in .env}
+    volumes:
+      - ./db:/db:ro
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: "no"
+
+  checkins:
+    build:
+      context: services/checkins
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    image: lockin-checkins:local
+    environment:
+      PORT: "8000"
+      DATABASE_URL: mssql+pymssql://checkins_app:${CHECKINS_DB_PASSWORD:?set CHECKINS_DB_PASSWORD in .env}@sqlserver:1433/checkins
+      POINTS_URL: http://points:8001  # the other service, found by its compose name
+      CORS_ORIGINS: http://localhost:5500
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:?set AUTH_TOKEN_SECRET in .env}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+    ports:
+      - "8000:8000"  # the browser calls it here (ui/config.js)
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  points:
+    build:
+      context: services/points
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}
+    image: lockin-points:local
+    environment:
+      PORT: "8001"
+      DATABASE_URL: mssql+pymssql://points_app:${POINTS_DB_PASSWORD:?set POINTS_DB_PASSWORD in .env}@sqlserver:1433/points
+      CHECKINS_URL: http://checkins:8000
+      CORS_ORIGINS: http://localhost:5500
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:?set AUTH_TOKEN_SECRET in .env}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+    ports:
+      - "8001:8001"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # The static UI, served by a stock nginx (not a service container of ours).
+  ui:
+    image: nginx:1.29.8-alpine
+    volumes:
+      - ./ui:/usr/share/nginx/html:ro
+    ports:
+      - "5500:80"  # the UI's origin, http://localhost:5500, is the one CORS allows
+    restart: unless-stopped
+
+volumes:
+  sqlserver-data:
