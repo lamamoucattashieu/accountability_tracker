@@ -43,7 +43,8 @@ class Service:
     def start(self):
         env = {**os.environ, **SECRETS, **self.env, "PORT": str(self.port)}
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(self.port)],
+            [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(self.port),
+             "--no-access-log"],
             cwd=SERVICES / self.name, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         deadline = time.monotonic() + STARTUP_TIMEOUT_S

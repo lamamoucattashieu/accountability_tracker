@@ -12,6 +12,7 @@ from app.points.internal_routes import router as internal_router
 from app.points.routes import router as points_router
 from app.shared.database import DatabaseUnavailable
 from app.shared.internal_api import add_cors
+from app.shared.observability import add_request_log, health as check_health
 
 SERVICE_NAME = "points"
 
@@ -33,6 +34,7 @@ app = FastAPI(title="Points & Forfeits", lifespan=lifespan)
 app.include_router(points_router)
 app.include_router(internal_router)
 add_cors(app)
+add_request_log(app, SERVICE_NAME)
 
 
 @app.exception_handler(DatabaseUnavailable)
@@ -44,9 +46,11 @@ def database_unavailable(request: Request, exc: DatabaseUnavailable):
 
 @app.get("/health")
 def health():
-    """Minimal for Phase 1; the full database check and version come in Phase 2."""
-    return {"status": "ok", "service": SERVICE_NAME}
+    """200 when this service can read and write its own database, 503 otherwise."""
+    status_code, body = check_health(settings.database_url, settings.git_sha)
+    return JSONResponse(status_code=status_code, content=body)
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=settings.port)
+    # access_log=False: the request log above already writes one line per request.
+    uvicorn.run(app, host="0.0.0.0", port=settings.port, access_log=False)

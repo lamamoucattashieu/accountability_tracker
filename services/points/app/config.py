@@ -37,6 +37,8 @@ def _required(name: str) -> str:
 class Settings:
     def __init__(self):
         self.port = int(os.environ.get("PORT", 8001))
+        # The commit the running code was built from, shown by /health. Set at build time.
+        self.git_sha = os.environ.get("GIT_SHA", "dev")
         # Where the Checkins service is, and how long to wait for it. Never hardcoded.
         self.checkins_url = os.environ.get("CHECKINS_URL", "http://localhost:8000").rstrip("/")
         self.checkins_timeout_s = float(os.environ.get("CHECKINS_TIMEOUT_S", DEFAULT_TIMEOUT_S))

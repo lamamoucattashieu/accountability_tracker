@@ -39,6 +39,8 @@ def _required(name: str) -> str:
 class Settings:
     def __init__(self):
         self.port = int(os.environ.get("PORT", 8000))
+        # The commit the running code was built from, shown by /health. Set at build time.
+        self.git_sha = os.environ.get("GIT_SHA", "dev")
         # Where the Points service is, and how long to wait for it. Never hardcoded.
         self.points_url = os.environ.get("POINTS_URL", "http://localhost:8001").rstrip("/")
         self.points_timeout_s = float(os.environ.get("POINTS_TIMEOUT_S", DEFAULT_TIMEOUT_S))
