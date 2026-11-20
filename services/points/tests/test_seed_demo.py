@@ -43,17 +43,17 @@ def iso(moment):
     return moment.isoformat(timespec="seconds")
 
 
-def test_demo_seed_settles_past_weeks_with_losers_and_proof(data_dir, crew):
+def test_demo_seed_settles_past_weeks_with_losers_and_proof(db, crew):
     summary = seed_demo.seed(THURSDAY, *crew)
     assert summary["settled_weeks"] >= 3
     assert summary["forfeit_losers"] >= 3  # sam alone, then leo and sam tied
     assert summary["proofs"] == 1
     conn = get_connection()
-    assert conn.execute("SELECT COUNT(*) FROM forfeits").fetchone()[0] == 4  # three past + next week's
+    assert conn.execute("SELECT COUNT(*) AS n FROM forfeits").fetchone()["n"] == 4  # three past + next week's
     conn.close()
 
 
-def test_demo_seed_refuses_a_database_that_has_forfeits(data_dir, crew):
+def test_demo_seed_refuses_a_database_that_has_forfeits(db, crew):
     seed_demo.seed(THURSDAY, *crew)
     with pytest.raises(SystemExit):
         seed_demo.seed(THURSDAY, *crew)

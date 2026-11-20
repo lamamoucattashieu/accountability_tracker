@@ -7,7 +7,6 @@ cross the seam.
 """
 
 import logging
-import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -16,6 +15,7 @@ from app.points import repository, rules
 from app.points.group_directory import CheckinsUnavailable, get_directory
 from app.points.rules import monday_of, week_start_for
 from app.shared import uploads
+from app.shared.database import is_duplicate_key, is_lock_timeout
 from app.shared.timeutils import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,9 @@ def _load_group(conn, group_id: int) -> Group:
     try:
         repository.save_group_snapshot(conn, data, utc_now_iso())
         conn.commit()
-    except sqlite3.OperationalError:  # e.g. the database is busy: the cache can wait
+    except Exception as exc:  # e.g. a lock timeout: the cache can wait
+        if not is_lock_timeout(exc):
+            raise
         conn.rollback()
         logger.warning("could not save the snapshot of group %s", group_id)
     return Group(data["id"], data["created_at"], data["members"],
@@ -290,24 +292,21 @@ def ensure_settled(conn, group_id: int, now: datetime, group: Group = None) -> N
 def _settle_week(conn, group: Group, week: date, now: datetime) -> None:
     """Settle one week in its own transaction: the settlement and its assignments commit together.
 
-    BEGIN IMMEDIATE takes SQLite's write lock before reading, so a concurrent
-    request settling the same week waits here, then sees the week settled and
-    does nothing. UNIQUE (group_id, week_start) is the backstop if that check
+    The group's settlement lock (sp_getapplock) is taken before reading, so a
+    concurrent request settling the same week waits here, then sees the week
+    settled and does nothing; if it waits longer than the lock timeout it gets
+    SettlementBusy. UNIQUE (group_id, week_start) is the backstop if that check
     is ever bypassed: the duplicate rolls back and the existing settlement stays.
     """
     try:
-        conn.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError as exc:
-        if exc.sqlite_errorcode == sqlite3.SQLITE_BUSY:  # the busy timeout expired
-            raise SettlementBusy("the group is being settled, please try again") from exc
-        raise
-    try:
+        if not repository.lock_group_for_settlement(conn, group.id):
+            raise SettlementBusy("the group is being settled, please try again")
         if repository.get_settlement(conn, group.id, week.isoformat()) is None:
             _write_settlement(conn, group, week, now)
         conn.commit()
-    except sqlite3.IntegrityError:
+    except Exception as exc:
         conn.rollback()
-        if repository.get_settlement(conn, group.id, week.isoformat()) is None:
+        if not is_duplicate_key(exc, "UQ_settlements_group_week"):
             raise  # not the duplicate-settlement backstop: a real error
     except BaseException:
         conn.rollback()
@@ -385,30 +384,20 @@ def submit_proof(conn, user_id: int, assignment_id: int, photo_file, now: dateti
     ensure_settled(conn, assignment["group_id"], now, group)
     if assignment["user_id"] != user_id:
         raise NotAssignee("only the member assigned this forfeit can upload proof")
-    if assignment["proof_path"] is not None:
+    if assignment["proof_at"] is not None:
         raise ProofAlreadySubmitted("proof was already uploaded")
-    proof_path = uploads.save_image(photo_file)
-    try:
-        stored = repository.set_proof(
-            conn, assignment_id, proof_path, now.isoformat(timespec="seconds")
-        )
-    except Exception:
-        uploads.delete_image(proof_path)  # same rule as create_checkin: no orphaned files
-        raise
-    if not stored:  # a simultaneous upload won the conditional UPDATE
-        uploads.delete_image(proof_path)
-        raise ProofAlreadySubmitted("proof was already uploaded")
+    photo, photo_type = uploads.validate_image(photo_file)
+    # The photo is stored in the assignment's row: stored together with proof_at, or not at all.
+    if not repository.set_proof(conn, assignment_id, photo, photo_type, now.isoformat(timespec="seconds")):
+        raise ProofAlreadySubmitted("proof was already uploaded")  # a simultaneous upload won
     return _assignment_response(repository.get_assignment(conn, assignment_id), now)
 
 
-def get_proof_photo_path(conn, user_id: int, assignment_id: int, now: datetime):
+def get_proof_photo(conn, user_id: int, assignment_id: int, now: datetime) -> tuple[bytes, str]:
     """Access-control gate in front of the proof photo: group members only."""
     assignment, group = _get_assignment_for_member(conn, user_id, assignment_id)
     ensure_settled(conn, assignment["group_id"], now, group)
-    if assignment["proof_path"] is None:
+    photo = repository.get_proof_photo(conn, assignment_id)
+    if photo is None:
         raise ProofNotFound("no proof uploaded yet")
-    path = uploads.resolve_path(assignment["proof_path"])
-    if not path.is_file():
-        logger.warning("assignment %s points to missing proof %s", assignment_id, path)
-        raise ProofNotFound("proof photo not found")
-    return path
+    return photo["proof_photo"], photo["proof_type"]

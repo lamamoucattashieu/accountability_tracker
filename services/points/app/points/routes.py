@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.auth.current_user import get_current_user
@@ -47,7 +47,7 @@ def _now() -> datetime:
 
 
 def _with_proof_url(assignment: dict) -> dict:
-    """The stored proof path is internal; clients get a URL behind the membership check."""
+    """The photo itself isn't in the response; clients get a URL behind the membership check."""
     url = f"/forfeit-assignments/{assignment['id']}/proof" if assignment["proof_at"] else None
     return {**assignment, "proof_url": url}
 
@@ -113,7 +113,7 @@ def submit_proof(
 def get_proof_photo(assignment_id: int, user=Depends(get_current_user)):
     with get_db() as conn:
         try:
-            path = service.get_proof_photo_path(conn, user["id"], assignment_id, _now())
+            photo, photo_type = service.get_proof_photo(conn, user["id"], assignment_id, _now())
         except HANDLED_ERRORS as exc:
             raise _to_http_error(exc)
-    return FileResponse(path)
+    return Response(content=photo, media_type=photo_type)

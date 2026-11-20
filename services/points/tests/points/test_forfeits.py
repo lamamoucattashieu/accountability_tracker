@@ -1,4 +1,4 @@
-import sqlite3
+import pymssql
 from itertools import count
 
 import pytest
@@ -31,7 +31,8 @@ def test_forfeit_at_the_length_limit_is_accepted(call, people, group):
 
 
 def test_database_also_enforces_the_length_limit(conn, people, group):
-    with pytest.raises(sqlite3.IntegrityError):
+    # NVARCHAR(200) refuses it before the CHECK runs ("would be truncated"): either way, not stored.
+    with pytest.raises(pymssql.DatabaseError):
         repository.insert_forfeit(conn, group, "x" * (FORFEIT_MAX_LENGTH + 1), people["ana"], "t")
 
 

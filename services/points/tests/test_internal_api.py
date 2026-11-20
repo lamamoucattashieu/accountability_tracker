@@ -16,7 +16,7 @@ COMPLETION = {"checkin_id": 7, "group_id": 1, "user_id": 2, "goal_id": 3,
 
 
 @pytest.fixture
-def api(data_dir):
+def api(db):
     # No "with": the startup hook would plug in the real Checkins directory.
     return TestClient(app)
 
@@ -29,7 +29,7 @@ def test_a_completion_is_recorded_once_however_often_it_arrives(api, conn):
     """Idempotent receiver: the outbox delivers at least once."""
     assert api.post("/internal/completions", json=COMPLETION, headers=INTERNAL).status_code == 204
     assert api.post("/internal/completions", json=COMPLETION, headers=INTERNAL).status_code == 204
-    assert [tuple(row) for row in events(conn)] == [(7, "2026-11-19T10:00:00+00:00", None)]
+    assert [tuple(row.values()) for row in events(conn)] == [(7, "2026-11-19T10:00:00+00:00", None)]
 
 
 def test_times_are_stored_in_utc_whatever_offset_was_sent(api, conn):

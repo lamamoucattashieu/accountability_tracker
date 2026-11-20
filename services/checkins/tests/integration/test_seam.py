@@ -64,14 +64,15 @@ class Service:
 
 
 @pytest.fixture
-def system(tmp_path):
+def system():
     checkins_port, points_port = free_port(), free_port()
     checkins_db = sqlserver.create_database("test_seam_checkins")
+    points_db = sqlserver.create_database("test_seam_points")
     checkins = Service("checkins", checkins_port, {
         "DATABASE_URL": checkins_db,
         "POINTS_URL": f"http://127.0.0.1:{points_port}", "POINTS_TIMEOUT_S": "1"})
     points = Service("points", points_port, {
-        "DATA_DIR": str(tmp_path / "points"),
+        "DATABASE_URL": points_db,
         "CHECKINS_URL": f"http://127.0.0.1:{checkins_port}", "CHECKINS_TIMEOUT_S": "1"})
     checkins.start()
     points.start()
@@ -79,6 +80,7 @@ def system(tmp_path):
     checkins.stop()
     points.stop()
     sqlserver.drop_database(checkins_db)
+    sqlserver.drop_database(points_db)
 
 
 def jpeg():

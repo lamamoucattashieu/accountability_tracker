@@ -1,29 +1,28 @@
-import sqlite3
-from contextlib import contextmanager
+"""This service's database: one connection per request, schema from migrations."""
+
+from pathlib import Path
 
 from app.config import settings
-from app.points import repository as points_repository
+from app.shared.database import connect, startup_retry_delays, transaction
+from app.shared.migrations import apply_migrations
+from app.shared.timeutils import utc_now_iso
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 
 def get_connection():
-    conn = sqlite3.connect(settings.db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return connect(settings.database_url)
 
 
-@contextmanager
 def get_db():
-    conn = get_connection()
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+    """One request's unit of work: committed at the end, rolled back on error."""
+    return transaction(settings.database_url)
 
 
 def init_db():
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-    with get_db() as conn:
-        points_repository.create_tables(conn)
+    """Apply pending migrations at startup, waiting for a database that is still resuming."""
+    conn = connect(settings.database_url, startup_retry_delays())
+    try:
+        apply_migrations(conn, MIGRATIONS_DIR, utc_now_iso())
+    finally:
+        conn.close()

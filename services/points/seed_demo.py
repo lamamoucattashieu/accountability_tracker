@@ -60,7 +60,7 @@ def find_crew(checkins_url: str) -> tuple[int, dict]:
 def seed(now: datetime, group_id: int, ids: dict) -> dict:
     init_db()
     conn = get_connection()
-    if conn.execute("SELECT COUNT(*) FROM forfeits").fetchone()[0]:
+    if conn.execute("SELECT COUNT(*) AS n FROM forfeits").fetchone()["n"]:
         raise SystemExit("This DATA_DIR already has forfeits. Point DATA_DIR at a fresh folder to seed the demo.")
 
     this_week = week_begins_at(week_start_for(now))
@@ -79,10 +79,10 @@ def seed(now: datetime, group_id: int, ids: dict) -> dict:
     # --- settle finished weeks, then proof for sam's oldest loss -------------------
     service.ensure_settled(conn, group_id, now)
     sam_loss = conn.execute(
-        """SELECT forfeit_assignments.id FROM forfeit_assignments
+        """SELECT TOP 1 forfeit_assignments.id FROM forfeit_assignments
            JOIN settlements ON settlements.id = forfeit_assignments.settlement_id
-           WHERE settlements.group_id = ? AND forfeit_assignments.user_id = ?
-           ORDER BY settlements.week_start LIMIT 1""",
+           WHERE settlements.group_id = %s AND forfeit_assignments.user_id = %s
+           ORDER BY settlements.week_start""",
         (group_id, ids["sam"]),
     ).fetchone()
     if sam_loss:
@@ -94,9 +94,9 @@ def seed(now: datetime, group_id: int, ids: dict) -> dict:
     conn.commit()
 
     summary = {
-        "settled_weeks": conn.execute("SELECT COUNT(*) FROM settlements").fetchone()[0],
-        "forfeit_losers": conn.execute("SELECT COUNT(*) FROM forfeit_assignments").fetchone()[0],
-        "proofs": conn.execute("SELECT COUNT(*) FROM forfeit_assignments WHERE proof_path IS NOT NULL").fetchone()[0],
+        "settled_weeks": conn.execute("SELECT COUNT(*) AS n FROM settlements").fetchone()["n"],
+        "forfeit_losers": conn.execute("SELECT COUNT(*) AS n FROM forfeit_assignments").fetchone()["n"],
+        "proofs": conn.execute("SELECT COUNT(*) AS n FROM forfeit_assignments WHERE proof_at IS NOT NULL").fetchone()["n"],
     }
     conn.close()
     return summary

@@ -1,4 +1,4 @@
-import sqlite3
+import pymssql
 
 import pytest
 
@@ -49,10 +49,10 @@ def test_duplicate_is_ignored_by_the_database_not_python(conn):
 
 
 def test_invalid_event_still_raises_instead_of_being_ignored(conn):
-    """ON CONFLICT only ignores a duplicate check-in; other violations are real errors."""
-    with pytest.raises(sqlite3.IntegrityError):
+    """Only a duplicate check-in counts as "already recorded"; other violations are real errors."""
+    with pytest.raises(pymssql.IntegrityError):
         record(conn, 1, times_per_week=9)
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(pymssql.IntegrityError):
         repository.insert_event(conn, 2, GROUP, ALICE, GYM, 3, "2026-09-30", "x")  # a Wednesday
 
 
