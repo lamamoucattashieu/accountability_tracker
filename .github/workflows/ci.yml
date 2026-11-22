@@ -78,3 +78,60 @@ jobs:
       # The image must build; it is not pushed anywhere here.
       - name: Build image
         run: docker build --build-arg GIT_SHA=${{ github.sha }} --tag lockin-${{ matrix.service }}:${{ github.sha }} .
+
+  # Checks on the repository as a whole, not on one service.
+  validate:
+    name: system.yaml, OpenAPI and shared copies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.5"
+
+      # CI-only tools, pinned here: they belong to neither service.
+      - name: Install the validators
+        run: pip install check-jsonschema==0.39.0 openapi-spec-validator==0.9.0 pyyaml==6.0.4
+
+      - name: system.yaml against system.schema.json
+        run: check-jsonschema --schemafile system.schema.json system.yaml
+
+      - name: OpenAPI documents against the OpenAPI specification
+        run: openapi-spec-validator services/checkins/openapi.json services/points/openapi.json
+
+      # Every endpoint a service calls (system.yaml "calls") must be in the called
+      # service's OpenAPI document (A2 spec 8a).
+      - name: Cross-service calls are in the called service's OpenAPI document
+        shell: python
+        run: |
+          import json
+          import yaml
+
+          system = yaml.safe_load(open("system.yaml", encoding="utf-8"))
+          missing = []
+          for name, service in system["services"].items():
+              for call in service.get("calls", []):
+                  called = system["services"][call["service"]]
+                  paths = json.load(open(called["openapi"], encoding="utf-8"))["paths"]
+                  for endpoint in call["endpoints"]:
+                      method, path = endpoint.split(" ", 1)
+                      if method.lower() not in paths.get(path, {}):
+                          missing.append(f"{name} calls {endpoint} on {call['service']}")
+          if missing:
+              raise SystemExit("Not in the called service's OpenAPI document: " + "; ".join(missing))
+          print("Every cross-service call is in the called service's OpenAPI document.")
+
+      # Code copied into both services (CLAUDE.md, Phase 1) must stay identical.
+      - name: Shared copies are identical in both services
+        run: |
+          status=0
+          for file in app/shared/__init__.py app/shared/database.py app/shared/internal_api.py \
+                      app/shared/migrations.py app/shared/observability.py app/shared/timeutils.py \
+                      app/shared/uploads.py app/auth/tokens.py; do
+            diff -u "services/checkins/$file" "services/points/$file" || status=1
+          done
+          # The 48h voting window is defined in each config.py and must be the same.
+          diff <(grep '^VOTING_WINDOW = ' services/checkins/app/config.py) \
+               <(grep '^VOTING_WINDOW = ' services/points/app/config.py) || status=1
+          exit $status
