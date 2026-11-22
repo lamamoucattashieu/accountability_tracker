@@ -1,0 +1,137 @@
+# CI (A2 spec 5): every push, on any branch, and every pull request is checked before it
+# can reach main. Nothing here signs in to Azure or touches Azure SQL: the tests run
+# against a throwaway SQL Server container that lives only as long as the job.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Read-only: CI only reads the code. Pushing images is CD's job (Phase 5).
+permissions:
+  contents: read
+
+jobs:
+  # One job per service, in parallel, so each service passes or fails on its own.
+  service:
+    name: ${{ matrix.service }} (lint, tests, coverage, image)
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moved to 26.04, which has no Python 3.13.5 build
+    strategy:
+      fail-fast: false  # a failure in one service doesn't hide the other's result
+      matrix:
+        service: [checkins, points]
+
+    # The same pinned SQL Server image as docker-compose.yml. The job's steps start only
+    # once the healthcheck passes. sa's password is a GitHub secret, never in this file.
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-CU28-ubuntu-22.04
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_PID: Developer
+          MSSQL_SA_PASSWORD: ${{ secrets.CI_MSSQL_SA_PASSWORD }}
+        ports:
+          - 1433:1433
+        # $MSSQL_SA_PASSWORD is expanded inside the container, from the env above.
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P $MSSQL_SA_PASSWORD -C -b -Q 'SELECT 1' -o /dev/null"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 20s
+
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+
+    env:
+      # Where the tests create their scratch databases (tests/sqlserver.py).
+      TEST_DATABASE_ADMIN_URL: mssql+pymssql://sa:${{ secrets.CI_MSSQL_SA_PASSWORD }}@localhost:1433/master
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The exact Python of the image (python:3.13.5-slim-bookworm).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.5"
+
+      - name: Install
+        run: pip install -r requirements-dev.txt -c constraints.txt
+
+      # Real errors only (syntax errors, undefined names, unused imports), not style.
+      - name: Lint
+        run: ruff check --select E4,E7,E9,F .
+
+      # The 70% gate is fail_under in .coveragerc. The checkins tests include the
+      # cross-seam integration test, which also starts ../points as a real process.
+      - name: Tests and coverage
+        run: pytest --cov=app --cov-report=term-missing
+
+      # Regenerate openapi.json from the code and fail if it differs from the committed file.
+      - name: OpenAPI document matches the code
+        run: |
+          python -c "import json, pathlib, main; pathlib.Path('openapi.json').write_text(json.dumps(main.app.openapi(), indent=2) + '\n', encoding='utf-8', newline='\n')"
+          git diff --exit-code -- openapi.json
+
+      # The image must build; it is not pushed anywhere here.
+      - name: Build image
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} --tag lockin-${{ matrix.service }}:${{ github.sha }} .
+
+  # Checks on the repository as a whole, not on one service.
+  validate:
+    name: system.yaml, OpenAPI and shared copies
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moved to 26.04, which has no Python 3.13.5 build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.5"
+
+      # CI-only tools, pinned here: they belong to neither service.
+      - name: Install the validators
+        run: pip install check-jsonschema==0.39.0 openapi-spec-validator==0.9.0 pyyaml==6.0.4
+
+      - name: system.yaml against system.schema.json
+        run: check-jsonschema --schemafile system.schema.json system.yaml
+
+      - name: OpenAPI documents against the OpenAPI specification
+        run: openapi-spec-validator services/checkins/openapi.json services/points/openapi.json
+
+      # Every endpoint a service calls (system.yaml "calls") must be in the called
+      # service's OpenAPI document (A2 spec 8a).
+      - name: Cross-service calls are in the called service's OpenAPI document
+        shell: python
+        run: |
+          import json
+          import yaml
+
+          system = yaml.safe_load(open("system.yaml", encoding="utf-8"))
+          missing = []
+          for name, service in system["services"].items():
+              for call in service.get("calls", []):
+                  called = system["services"][call["service"]]
+                  paths = json.load(open(called["openapi"], encoding="utf-8"))["paths"]
+                  for endpoint in call["endpoints"]:
+                      method, path = endpoint.split(" ", 1)
+                      if method.lower() not in paths.get(path, {}):
+                          missing.append(f"{name} calls {endpoint} on {call['service']}")
+          if missing:
+              raise SystemExit("Not in the called service's OpenAPI document: " + "; ".join(missing))
+          print("Every cross-service call is in the called service's OpenAPI document.")
+
+      # Code copied into both services (CLAUDE.md, Phase 1) must stay identical.
+      - name: Shared copies are identical in both services
+        run: |
+          status=0
+          for file in app/shared/__init__.py app/shared/database.py app/shared/internal_api.py \
+                      app/shared/migrations.py app/shared/observability.py app/shared/timeutils.py \
+                      app/shared/uploads.py app/auth/tokens.py; do
+            diff -u "services/checkins/$file" "services/points/$file" || status=1
+          done
+          # The 48h voting window is defined in each config.py and must be the same.
+          diff <(grep '^VOTING_WINDOW = ' services/checkins/app/config.py) \
+               <(grep '^VOTING_WINDOW = ' services/points/app/config.py) || status=1
+          exit $status

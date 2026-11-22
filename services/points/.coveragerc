@@ -9,3 +9,5 @@ omit =
 
 [report]
 show_missing = True
+# The coverage gate (A2 spec 5): the same verdict locally and in CI.
+fail_under = 70

@@ -1,5 +1,7 @@
 # lockin.
 
+[![CI](https://github.com/lamamoucattashieu/accountability_tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/lamamoucattashieu/accountability_tracker/actions/workflows/ci.yml)
+
 **No ghosting your goals.** A habit tracker for friend groups: everyone sets weekly goals, posts
 photo proof, and the crew keeps each other honest. Friends can call cap on a suspicious check-in,
 reply to it, or nudge someone who's slacking. Points add up on a weekly leaderboard, and the week's
@@ -182,6 +184,41 @@ test passes on the stack.**
   them.
 
 The `routes.py` files are excluded from coverage (see [ADR-4](ADR.md)).
+Each `.coveragerc` sets `fail_under = 70`, so a run below 70% fails, locally and in CI.
+
+### Lint and OpenAPI
+
+```bash
+cd services/checkins && ruff check --select E4,E7,E9,F .   # real errors only, not style (same in points)
+```
+
+Each service's OpenAPI document (`services/<name>/openapi.json`) is generated from the code and
+committed. After changing an endpoint, regenerate it from the service's folder:
+
+```bash
+python -c "import json, pathlib, main; pathlib.Path('openapi.json').write_text(json.dumps(main.app.openapi(), indent=2) + '
+', encoding='utf-8', newline='
+')"
+```
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push, on any branch, and on
+every pull request. It never connects to Azure.
+
+- **One job per service** (`checkins`, `points`, in parallel): install `requirements-dev.txt`, lint
+  with ruff, run the tests with the 70% coverage gate against a SQL Server service container (the
+  same image as compose), regenerate `openapi.json` and fail if it differs from the committed file,
+  and build the Docker image (not pushed).
+- **One validation job:** `system.yaml` against `system.schema.json`, both OpenAPI documents against
+  the OpenAPI specification, every cross-service call listed in `system.yaml` present in the called
+  service's document, and the code copied into both services (`app/shared/`, `app/auth/tokens.py`,
+  the 48h voting window) still identical.
+
+The SQL Server password is the repository secret `CI_MSSQL_SA_PASSWORD` (letters and digits, 16+
+characters, like the `.env` passwords). `main` only accepts changes through pull requests whose
+CI has passed (branch protection). The end-to-end smoke test is not part of CI; run it locally on
+the compose stack (see above).
 
 ## Project structure
 

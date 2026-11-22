@@ -8,7 +8,8 @@ the group agreed on in advance.
 **Assignment 1: submitted and done** (deadline 2026-10-04 23:59). All phases (0-7) and the
 redesign are merged (PRs #1-#13). A1 spec: @docs/assignment_spec.md
 
-**Assignment 2: in progress.** Deadline **2026-11-22 23:59**. Spec: @docs/assignment2_spec.md
+**Assignment 2: in progress.** Deadline **2026-11-29 23:59** (moved from 11-22); my target is
+to tag `submission` by **2026-11-25 23:59**. Spec: @docs/assignment2_spec.md
 Nothing is provided: I write the Dockerfiles, compose file, pipeline and deployment myself.
 
 A2 roadmap (from class):
@@ -252,6 +253,20 @@ came from. Never record a decision I didn't make.
 | OpenAPI files | Phase 3 | `services/<name>/openapi.json` (FastAPI writes JSON; spec 8a allows .json) |
 | Demo seed with compose | Phase 3 | Not in the images; run from the host against the published ports with each service's own login |
 | Apple Silicon | Phase 3 | README note: Rosetta in Docker Desktop; no `platform:` in compose |
+| Deadline and schedule | Phase 4 | Deadline moved to 2026-11-29; I submit by 2026-11-25: Phase 4 on 22, Phase 5 on 23, Phase 6 evidence on 24, docs and the `submission` tag on 25, 26-29 buffer |
+| Linter | Phase 4 | `ruff==0.17.6` in each `requirements-dev.txt`, no config file or formatter; real errors only (`--select E4,E7,E9,F`, since ruff 0.17's defaults include style rules) |
+| OpenAPI documents | Phase 4 | Generated from `app.openapi()` by one documented command and committed; CI regenerates them and fails on a difference; validated with `openapi-spec-validator`; CI checks every `calls:` endpoint in `system.yaml` exists in the called service's document |
+| CI-only tools | Phase 4 | `check-jsonschema==0.39.0`, `openapi-spec-validator==0.9.0`, `pyyaml==6.0.4`, pinned inline in the workflow, in no requirements file |
+| SQL Server in CI | Phase 4 | GitHub Actions service container on the compose image `2022-CU28-ubuntu-22.04`; `sa` password from the GitHub secret `CI_MSSQL_SA_PASSWORD` |
+| CI job layout | Phase 4 | A matrix job per service (lint, tests, coverage, OpenAPI drift, image build, not pushed) plus one validation job; the checkins job also starts `../points` for the seam test, which relies on identical requirements |
+| Coverage gate | Phase 4 | `fail_under = 70` in each `.coveragerc`, the same verdict locally and in CI |
+| Copies check | Phase 4 | A `diff` step naming `app/shared/*.py` and `app/auth/tokens.py`, plus the `VOTING_WINDOW` line of each `config.py` |
+| Action versions | Phase 4 | Major tags (`@v4`, `@v5`); commit SHAs named in ADR-9 as the stricter alternative |
+| Smoke test in CI | Phase 4 | Not in CI: stays a local `pytest e2e` on the compose stack (ADR-9) |
+| CI triggers | Phase 4 | `push` on every branch plus `pull_request` |
+| Branch protection | Phase 4 | `main` requires CI to pass before merging (set by me in GitHub) |
+| ADR-9 | Phase 4 | Written as a finished entry from my answers; ADR-4 → Superseded by 9 |
+| CI runner | Phase 4 | `runs-on: ubuntu-24.04`, keeping Python 3.13.5: `ubuntu-latest` moved to 26.04, which has no 3.13.5 build (first run 44993733958 failed in `setup-python`; fixed in 44993965772) |
 
 ---
 
@@ -466,16 +481,22 @@ work protocol.
    the `submission` tag.
 
 ## A2 schedule
-Deadline **Sunday 2026-11-22 23:59**. Every day needs at least one pushed commit (push
-timestamps count).
+Deadline **Sunday 2026-11-29 23:59** (moved from 11-22). Target: tag `submission` by **Wednesday
+2026-11-25 23:59**. Every day needs at least one pushed commit (push timestamps count).
 
 | Day | Phases | Roughly what |
 |---|---|---|
-| Thu 19 | 1. Split | Two services (checkins, points) talking over HTTP, UI moved to `ui/`, partial-failure behaviour, tests moved per service. ADR-6 draft. |
-| Fri 20 | 2. Data, 3. Containers | SQL Server per service, migrations + `schema_migrations`, retries, `/health`, request logs; then both Dockerfiles and `docker-compose.yml` with SQL Server, db-init and nginx. ADR-7 draft. |
-| Sat 21 | 4. CI, 5. Azure + CD | GitHub Actions CI (lint, tests, coverage ≥70%, validation, image builds); Azure initial setup from `docs/azure_deployment_guide.md` and CD to Container Apps + the storage static website, with only migration 001 deployed. ADR-8 and ADR-9 drafts. |
-| Sun 22 | 6. Evidence and submission | Data on Azure, then migration 002 deployed and the data shown to survive; report evidence, README, ADR-10, AI_USAGE.md complete; tag `submission` on `main` before 23:59. |
+| Thu 19 | 1. Split | Done. Two services talking over HTTP, UI in `ui/`, partial-failure behaviour, tests per service. ADR-6. |
+| Fri 20 | 2. Data, 3. Containers | Done. SQL Server per service, migrations, retries, `/health`, request logs; Dockerfiles, compose, db-init, nginx. ADR-7. |
+| Sat 21 | (none) | No commits: the deadline moved. |
+| Sun 22 | 4. CI | GitHub Actions CI (lint, tests, coverage ≥70%, validation, image builds), OpenAPI files. ADR-9. Push today. |
+| Mon 23 | 5. Azure + CD | Azure initial setup from `docs/azure_deployment_guide.md`, images to GHCR, CD to Container Apps + the storage static website, post-deploy health check, with only migration 001 deployed. ADR-8. |
+| Tue 24 | 6. Evidence | Data on Azure, then migration 002 deployed and the data shown to survive; partial-failure and pipeline evidence (a failed run that was fixed). ADR-10. |
+| Wed 25 | Docs and submission | README, diagrams, report, AI_USAGE.md complete, final checks; tag `submission` on `main` before 23:59. |
+| Thu 26 - Sun 29 | Buffer | Only if something slips. |
 
+- Commit rule check: 2026-11-20 holds 18 commits, so A2 needs at least 45 commits in total for no
+  day to exceed 40%; spreading Phases 4-6 over 22-25 gives 8 distinct days.
 - The detail of each phase comes from me at the start of that phase. This table is only the outline.
 - If a phase runs late, tell me as soon as you see it and ask me what to cut. Never cut on your
   own, and never cut the commit days, the migration evidence, partial-failure handling, the
