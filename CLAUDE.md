@@ -266,6 +266,7 @@ came from. Never record a decision I didn't make.
 | CI triggers | Phase 4 | `push` on every branch plus `pull_request` |
 | Branch protection | Phase 4 | `main` requires CI to pass before merging (set by me in GitHub) |
 | ADR-9 | Phase 4 | Written as a finished entry from my answers; ADR-4 → Superseded by 9 |
+| CI runner | Phase 4 | `runs-on: ubuntu-24.04`, keeping Python 3.13.5: `ubuntu-latest` moved to 26.04, which has no 3.13.5 build (first run 44993733958 failed in `setup-python`; fixed in 44993965772) |
 
 ---
 
