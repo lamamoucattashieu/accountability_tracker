@@ -16,7 +16,7 @@ jobs:
   # One job per service, in parallel, so each service passes or fails on its own.
   service:
     name: ${{ matrix.service }} (lint, tests, coverage, image)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moved to 26.04, which has no Python 3.13.5 build
     strategy:
       fail-fast: false  # a failure in one service doesn't hide the other's result
       matrix:
@@ -82,7 +82,7 @@ jobs:
   # Checks on the repository as a whole, not on one service.
   validate:
     name: system.yaml, OpenAPI and shared copies
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moved to 26.04, which has no Python 3.13.5 build
     steps:
       - uses: actions/checkout@v4
 
