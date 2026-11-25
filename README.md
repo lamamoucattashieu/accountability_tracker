@@ -322,17 +322,22 @@ docker run --rm -e SQLCMDPASSWORD="$SQL_ADMIN_PASSWORD" --entrypoint /opt/mssql-
 az sql server firewall-rule delete --server lhvmoucattas-ieu2024-sql --resource-group rg-lhvmoucattas-ieu2024 --name SetupMyIP
 #    Checked: each user logs in to its own database and gets "Login failed" on the other one.
 
-# 5. Container Apps environment (no Log Analytics) and the two apps, on a placeholder image
+# 5. Container Apps environment (workload profiles, no Log Analytics) and the two apps on its
+#    Consumption profile, on a placeholder image. --environment-mode is explicit because the CLI
+#    now defaults to an Express (preview) environment, which rejected --revision-suffix in the
+#    first CD run (45684969529); that environment was deleted and recreated like this.
 az containerapp env create --name lhvmoucattas-ieu2024-env --resource-group rg-lhvmoucattas-ieu2024 \
-  --location austriaeast --logs-destination none
+  --location austriaeast --logs-destination none --environment-mode WorkloadProfiles
 az containerapp create --name lhvmoucattas-ieu2024-checkins --environment lhvmoucattas-ieu2024-env \
-  --resource-group rg-lhvmoucattas-ieu2024 --image mcr.microsoft.com/k8se/quickstart:latest \
+  --resource-group rg-lhvmoucattas-ieu2024 --workload-profile-name Consumption \
+  --image mcr.microsoft.com/k8se/quickstart:latest \
   --ingress external --target-port 8000 --min-replicas 0 --max-replicas 1 --cpu 0.25 --memory 0.5Gi
 az containerapp create --name lhvmoucattas-ieu2024-points --environment lhvmoucattas-ieu2024-env \
-  --resource-group rg-lhvmoucattas-ieu2024 --image mcr.microsoft.com/k8se/quickstart:latest \
+  --resource-group rg-lhvmoucattas-ieu2024 --workload-profile-name Consumption \
+  --image mcr.microsoft.com/k8se/quickstart:latest \
   --ingress external --target-port 8001 --min-replicas 0 --max-replicas 1 --cpu 0.25 --memory 0.5Gi
-#    -> https://lhvmoucattas-ieu2024-checkins.kindisland-b2c5efb8.austriaeast.azurecontainerapps.io
-#    -> https://lhvmoucattas-ieu2024-points.kindisland-b2c5efb8.austriaeast.azurecontainerapps.io
+#    -> https://lhvmoucattas-ieu2024-checkins.agreeablesand-808a27ad.austriaeast.azurecontainerapps.io
+#    -> https://lhvmoucattas-ieu2024-points.agreeablesand-808a27ad.austriaeast.azurecontainerapps.io
 
 # 6. The pipeline's identity: Contributor on the resource group, blob uploads on the storage
 #    account, trusted only for runs on main of this repository (both subject formats)
