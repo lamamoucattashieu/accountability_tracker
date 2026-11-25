@@ -1,14 +1,19 @@
-# CI (A2 spec 5): every push, on any branch, and every pull request is checked before it
-# can reach main. Nothing here signs in to Azure or touches Azure SQL: the tests run
-# against a throwaway SQL Server container that lives only as long as the job.
+# CI (A2 spec 5): every push and every pull request is checked before it can reach main.
+# Nothing here signs in to Azure or touches Azure SQL: the tests run against a throwaway
+# SQL Server container that lives only as long as the job.
+#
+# On main, CD (cd.yml) runs this same workflow first (workflow_call) and deploys only if
+# it passes, so a push to main is not also run here directly (it would run CI twice).
 
 name: CI
 
 on:
   push:
+    branches-ignore: [main]
   pull_request:
+  workflow_call:
 
-# Read-only: CI only reads the code. Pushing images is CD's job (Phase 5).
+# Read-only: CI only reads the code. Pushing images is CD's job (cd.yml).
 permissions:
   contents: read
 

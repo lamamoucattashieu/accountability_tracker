@@ -3,8 +3,8 @@
 # the Azure deployment at the graded commit; CI validates it against system.schema.json.
 student: lhvmoucattas.ieu2024
 prefix: lhvmoucattas-ieu2024
-# The zone number (z6) is confirmed when the storage account is created in Phase 5.
-public_url: https://lhvmoucattasieu2024ui.z6.web.core.windows.net
+# The static website of the storage account (zone z49, assigned by Azure when it was created).
+public_url: https://lhvmoucattasieu2024ui.z49.web.core.windows.net
 ui:
   path: ui
   storage_account: lhvmoucattasieu2024ui
