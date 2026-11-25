@@ -1,0 +1,177 @@
+# CD (A2 spec 5 and 7): every push to main is tested, then deployed to Azure with no
+# manual step.
+#
+#   ci      the whole of ci.yml (lint, tests, coverage, validation, image builds)
+#   images  only if ci passed: build each image again and push it to GHCR, tagged with
+#           the commit SHA
+#   deploy  sign in to Azure as the lhvmoucattas-ieu2024-github managed identity over
+#           OIDC (no Azure password stored anywhere), point both Container Apps at the
+#           new images with their secrets, upload the UI to the storage static website
+#           with the services' addresses, then fail unless both /health answer 200
+#
+# The Azure resources themselves were created once by hand (README, "Azure initial
+# setup"); this workflow only updates them. Non-secret names come from the repository
+# variables PREFIX, RESOURCE_GROUP and UI_STORAGE; every password from GitHub secrets.
+
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Two merges in a row deploy one after the other, never at the same time.
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io/lamamoucattashieu
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit  # CI needs CI_MSSQL_SA_PASSWORD for its SQL Server container
+
+  images:
+    name: ${{ matrix.service }} image to GHCR
+    needs: ci
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write  # push to GHCR with the run's own GITHUB_TOKEN
+    strategy:
+      matrix:
+        service: [checkins, points]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      # --provenance=false: a plain image, which Container Apps can pull (a provenance
+      # attestation turns it into a list that it rejects). The source label links the
+      # package to this repository on GitHub.
+      - name: Build
+        run: >-
+          docker build --provenance=false
+          --build-arg GIT_SHA=${{ github.sha }}
+          --label org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          --tag $REGISTRY/lockin-${{ matrix.service }}:${{ github.sha }}
+          services/${{ matrix.service }}
+
+      - name: Push
+        run: docker push $REGISTRY/lockin-${{ matrix.service }}:${{ github.sha }}
+
+  deploy:
+    needs: images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write  # lets azure/login ask GitHub for the OIDC token
+    env:
+      PREFIX: ${{ vars.PREFIX }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      UI_STORAGE: ${{ vars.UI_STORAGE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # IDs only, no password: Azure trusts the token because of the identity's federated
+      # credential for this repository's main branch.
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the Container Apps CLI extension
+        run: az extension add --name containerapp --upgrade --yes
+
+      # Read from Azure, not written here, so they always match what exists.
+      - name: Find the services' and the UI's addresses
+        run: |
+          checkins_fqdn=$(az containerapp show --name "$PREFIX-checkins" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn --output tsv)
+          points_fqdn=$(az containerapp show --name "$PREFIX-points" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn --output tsv)
+          ui_web=$(az storage account show --name "$UI_STORAGE" --resource-group "$RESOURCE_GROUP" --query primaryEndpoints.web --output tsv)
+          echo "CHECKINS_URL=https://$checkins_fqdn" >> "$GITHUB_ENV"
+          echo "POINTS_URL=https://$points_fqdn" >> "$GITHUB_ENV"
+          echo "UI_ORIGIN=${ui_web%/}" >> "$GITHUB_ENV"  # an origin has no trailing slash
+
+      # Secrets are set on every deploy, so rotating one is: change the GitHub secret,
+      # re-run this job. The app reads them through secretref:, never as plain values.
+      # A new revision suffix per run makes even a re-run with the same image restart
+      # the app with the current secrets.
+      - name: Deploy checkins
+        env:
+          DB_PASSWORD: ${{ secrets.CHECKINS_DB_PASSWORD }}
+          AUTH_TOKEN_SECRET: ${{ secrets.AUTH_TOKEN_SECRET }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+        run: |
+          az containerapp secret set --name "$PREFIX-checkins" --resource-group "$RESOURCE_GROUP" --output none --secrets \
+            "database-url=mssql+pymssql://checkins_app:$DB_PASSWORD@$PREFIX-sql.database.windows.net:1433/$PREFIX-checkins-db" \
+            "auth-token-secret=$AUTH_TOKEN_SECRET" \
+            "internal-api-key=$INTERNAL_API_KEY"
+          az containerapp update --name "$PREFIX-checkins" --resource-group "$RESOURCE_GROUP" --output none \
+            --image "$REGISTRY/lockin-checkins:$GITHUB_SHA" \
+            --revision-suffix "r$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --set-env-vars PORT=8000 \
+              DATABASE_URL=secretref:database-url \
+              AUTH_TOKEN_SECRET=secretref:auth-token-secret \
+              INTERNAL_API_KEY=secretref:internal-api-key \
+              "POINTS_URL=$POINTS_URL" \
+              "CORS_ORIGINS=$UI_ORIGIN"
+
+      - name: Deploy points
+        env:
+          DB_PASSWORD: ${{ secrets.POINTS_DB_PASSWORD }}
+          AUTH_TOKEN_SECRET: ${{ secrets.AUTH_TOKEN_SECRET }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
+        run: |
+          az containerapp secret set --name "$PREFIX-points" --resource-group "$RESOURCE_GROUP" --output none --secrets \
+            "database-url=mssql+pymssql://points_app:$DB_PASSWORD@$PREFIX-sql.database.windows.net:1433/$PREFIX-points-db" \
+            "auth-token-secret=$AUTH_TOKEN_SECRET" \
+            "internal-api-key=$INTERNAL_API_KEY"
+          az containerapp update --name "$PREFIX-points" --resource-group "$RESOURCE_GROUP" --output none \
+            --image "$REGISTRY/lockin-points:$GITHUB_SHA" \
+            --revision-suffix "r$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --set-env-vars PORT=8001 \
+              DATABASE_URL=secretref:database-url \
+              AUTH_TOKEN_SECRET=secretref:auth-token-secret \
+              INTERNAL_API_KEY=secretref:internal-api-key \
+              "CHECKINS_URL=$CHECKINS_URL" \
+              "CORS_ORIGINS=$UI_ORIGIN"
+
+      # The same static files as locally; only config.js changes, to the Azure addresses.
+      # --auth-mode login: the upload is authorised by the identity's Storage Blob Data
+      # Contributor role, so no storage account key is ever read.
+      - name: Upload the UI to the static website
+        run: |
+          cat > ui/config.js <<EOF
+          // Written by the CD pipeline: where the two services are on Azure.
+          window.APP_CONFIG = {
+            checkinsUrl: "$CHECKINS_URL",
+            pointsUrl: "$POINTS_URL",
+          };
+          EOF
+          az storage blob upload-batch --account-name "$UI_STORAGE" --auth-mode login \
+            --destination '$web' --source ui --overwrite --output none
+
+      # Up to 5 minutes, every 10 s: enough for a cold start and a paused database to
+      # resume (about a minute). Each request may itself wait ~30 s for a 503 while the
+      # container starts.
+      - name: Both services answer /health with 200
+        run: |
+          for url in "$CHECKINS_URL" "$POINTS_URL"; do
+            deadline=$((SECONDS + 300))
+            until [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 40 "$url/health")" = "200" ]; do
+              if [ $SECONDS -ge $deadline ]; then
+                echo "$url/health did not return 200 within 5 minutes"
+                exit 1
+              fi
+              sleep 10
+            done
+            echo "$url/health: 200"
+            curl --silent "$url/health"; echo
+          done
