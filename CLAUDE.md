@@ -276,6 +276,16 @@ came from. Never record a decision I didn't make.
 | Container size | Phase 5 | 0.25 vCPU / 0.5 GiB per Container App, min 0 / max 1 replicas |
 | Who runs the setup | Phase 5 | Claude runs each `az` command in my session after showing it; outputs go into the README without passwords |
 | Schedule after slipping a day | Phase 5 | Everything moves one day: Phase 5 on 24, Phase 6 evidence on 25, docs and the `submission` tag on 26, buffer 27-29 |
+| Schedule after slipping a second day | Phase 5 | Phase 5 on 25, Phase 6 evidence on 26, docs and the `submission` tag on 27, buffer 28-29 |
+| Resource group | Phase 5 | The empty `rg-lhvmoucattas-ieu2024` found in polandcentral is deleted and recreated in switzerlandnorth |
+| Region, after setup started | Phase 5 | Everything in `austriaeast`: switzerlandnorth refused new SQL servers (`RegionDoesNotAllowProvisioning`), and only austriaeast reported SQL as Available. The switzerlandnorth resource group and storage account (both empty) were deleted and recreated there, so the app and its database share a region. Replaces the `switzerlandnorth` Region row |
+| Databases without the free offer | Phase 5 | austriaeast refuses the free offer (`ProvisioningDisabled`) and it is the only allowed region that accepts SQL servers, so both databases are serverless without it: General Purpose, Gen5, 0.5-1 vCore, LRS backups, 2 GB max, 60-minute auto-pause (I chose 15, but Azure's minimum for GP_S_Gen5_1 here is 60, the same as the free offer). Paid from the student credit only while awake; a justified deviation from spec 7.3 in ADR-8, and I email the professor |
+| UI upload | Phase 5 | The identity gets Storage Blob Data Contributor on the storage account; the pipeline uploads with `--auth-mode login`, never a storage key |
+| GHCR pull | Phase 5 | Both packages made public after their first push (the code is public already); no registry credentials in Container Apps |
+| Federated credentials | Phase 5 | Both subjects registered: the name form and the numeric-ID form, for `main` only |
+| Non-secret deploy settings | Phase 5 | GitHub repository variables `PREFIX`, `RESOURCE_GROUP`, `UI_STORAGE` |
+| `sqlcmd` for the Azure setup | Phase 5 | Run from the pinned SQL Server image, as `db-init` does |
+| SQL admin | Phase 5 | SQL authentication admin (contained users with passwords need it); password generated locally, kept only in my password manager, never in the repo or GitHub |
 
 ---
 
@@ -490,8 +500,8 @@ work protocol.
    the `submission` tag.
 
 ## A2 schedule
-Deadline **Sunday 2026-11-29 23:59** (moved from 11-22). Target: tag `submission` by **Thursday
-2026-11-26 23:59** (moved from 11-25 after Mon 23 slipped). Every day needs at least one pushed
+Deadline **Sunday 2026-11-29 23:59** (moved from 11-22). Target: tag `submission` by **Friday
+2026-11-27 23:59** (moved from 11-25 after Mon 23 slipped, then from 11-26 after Tue 24 slipped). Every day needs at least one pushed
 commit (push timestamps count).
 
 | Day | Phases | Roughly what |
@@ -501,13 +511,14 @@ commit (push timestamps count).
 | Sat 21 | (none) | No commits: the deadline moved. |
 | Sun 22 | 4. CI | Done. GitHub Actions CI (lint, tests, coverage ≥70%, validation, image builds), OpenAPI files. ADR-9. |
 | Mon 23 | (none) | Slipped: no commits. |
-| Tue 24 | 5. Azure + CD | Azure initial setup from `docs/azure_deployment_guide.md`, images to GHCR, CD to Container Apps + the storage static website, post-deploy health check, with only migration 001 deployed. ADR-8. |
-| Wed 25 | 6. Evidence | Data on Azure, then migration 002 deployed and the data shown to survive; partial-failure and pipeline evidence (a failed run that was fixed). ADR-10. |
-| Thu 26 | Docs and submission | README, diagrams, report, AI_USAGE.md complete, final checks; tag `submission` on `main` before 23:59. |
-| Fri 27 - Sun 29 | Buffer | Only if something slips. |
+| Tue 24 | (none) | Slipped: only the Phase 5 decisions commit. |
+| Wed 25 | 5. Azure + CD | Azure initial setup from `docs/azure_deployment_guide.md`, images to GHCR, CD to Container Apps + the storage static website, post-deploy health check, with only migration 001 deployed. ADR-8. |
+| Thu 26 | 6. Evidence | Data on Azure, then migration 002 deployed and the data shown to survive; partial-failure and pipeline evidence (a failed run that was fixed). ADR-10. |
+| Fri 27 | Docs and submission | README, diagrams, report, AI_USAGE.md complete, final checks; tag `submission` on `main` before 23:59. |
+| Sat 28 - Sun 29 | Buffer | Only if something slips. |
 
 - Commit rule check: 2026-11-20 holds 18 commits, so A2 needs at least 45 commits in total for no
-  day to exceed 40%; spreading Phases 5-6 and the docs over 24-26 still gives 8 distinct days (17, 18, 19, 20, 22, 24, 25, 26).
+  day to exceed 40%; spreading Phases 5-6 and the docs over 25-27 gives 9 distinct days (17, 18, 19, 20, 22, 24, 25, 26, 27).
 - The detail of each phase comes from me at the start of that phase. This table is only the outline.
 - If a phase runs late, tell me as soon as you see it and ask me what to cut. Never cut on your
   own, and never cut the commit days, the migration evidence, partial-failure handling, the
