@@ -6,8 +6,9 @@ from datetime import timedelta
 # which settles a week only once every voting window for its check-ins has closed.
 # The two copies are kept identical, and Phase 4 CI checks that they still match.
 VOTING_WINDOW = timedelta(hours=48)
-# Length limits: migrations/001_init.sql holds the same numbers (tests compare them).
+# Length limits: the migrations hold the same numbers (tests compare them).
 USERNAME_MAX_LENGTH = 50
+GROUP_NAME_MAX_LENGTH = 60  # migrations/002_limit_group_names.sql
 COMMENT_MAX_LENGTH = 280
 NUDGE_MAX_LENGTH = 140
 DEFAULT_NUDGE_MESSAGE = "don't be a loser, get to work and get it done."

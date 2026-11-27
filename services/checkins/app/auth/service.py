@@ -7,7 +7,7 @@ from app.auth.security import (
     new_session_token,
     verify_password,
 )
-from app.config import USERNAME_MAX_LENGTH
+from app.config import GROUP_NAME_MAX_LENGTH, USERNAME_MAX_LENGTH
 from app.shared.timeutils import utc_now_iso
 
 SESSION_TTL = timedelta(days=7)
@@ -110,6 +110,8 @@ def create_group(conn, user_id: int, name: str):
     name = name.strip()
     if not name:
         raise ValueError("group name cannot be empty")
+    if len(name) > GROUP_NAME_MAX_LENGTH:
+        raise ValueError(f"group name must be at most {GROUP_NAME_MAX_LENGTH} characters")
     invite_code = new_invite_code()
     while repository.get_group_by_invite_code(conn, invite_code):
         invite_code = new_invite_code()

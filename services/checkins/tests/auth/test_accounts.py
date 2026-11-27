@@ -4,6 +4,7 @@ import pytest
 
 from app.auth import repository, service
 from app.auth.security import hash_password, verify_password
+from app.config import GROUP_NAME_MAX_LENGTH
 from app.shared.timeutils import utc_now_iso
 
 
@@ -98,6 +99,13 @@ def test_group_name_cannot_be_empty(conn, name):
     alice = make_user(conn, "alice")
     with pytest.raises(ValueError):  # 422
         service.create_group(conn, alice, name)
+
+
+def test_group_name_can_be_exactly_the_limit_but_not_longer(conn):
+    alice = make_user(conn, "alice")
+    assert service.create_group(conn, alice, "g" * GROUP_NAME_MAX_LENGTH)["name"] == "g" * GROUP_NAME_MAX_LENGTH
+    with pytest.raises(ValueError):  # 422
+        service.create_group(conn, alice, "g" * (GROUP_NAME_MAX_LENGTH + 1))
 
 
 def test_joining_with_an_invite_code_ignores_case_and_spaces(conn):
