@@ -275,6 +275,12 @@ came from. Never record a decision I didn't make.
 | Post-deploy health check | Phase 5 | `/health` on each service every 10 s for up to 5 minutes, then the run fails |
 | Container size | Phase 5 | 0.25 vCPU / 0.5 GiB per Container App, min 0 / max 1 replicas |
 | Container Apps environment mode | Phase 5 | `--environment-mode WorkloadProfiles` (Microsoft's documented default) with both apps on the `Consumption` profile; no Dedicated profile. The CLI had created an Express (preview) environment by default, which rejected `--revision-suffix` in the first CD run (45684969529); it and the placeholder apps were deleted and recreated. Consumption-only was rejected as legacy |
+| Schedule after the third slip | Phase 6 | Phase 6 on 27 (after Phase 5 ran past midnight), docs, report and the `submission` tag on 28, 29 only for fixes |
+| Migration 002 | Phase 6 | Caps group names: longer names shortened (`LEFT`), `groups.name` becomes `NVARCHAR(60) NOT NULL` with a CHECK; `GROUP_NAME_MAX_LENGTH = 60` and 422 in `create_group` |
+| Data on Azure before 002 | Phase 6 | Both halves of `seed_demo.py` run once from my machine against Azure through temporary exact-IP firewall rules, then one real check-in posted on the live site |
+| Migration evidence | Phase 6 | A committed `docs/migration_evidence.md`: before/after query outputs, the CD run link and the startup log line |
+| Partial-failure evidence | Phase 6 | Local, `docker compose stop points`, with screenshots and responses; nothing changed on Azure by hand |
+| ADR-10 | Phase 6 | A message broker (Service Bus) deliberately not built; the `points_outbox` instead, and when a broker would be worth it |
 | Who runs the setup | Phase 5 | Claude runs each `az` command in my session after showing it; outputs go into the README without passwords |
 | Schedule after slipping a day | Phase 5 | Everything moves one day: Phase 5 on 24, Phase 6 evidence on 25, docs and the `submission` tag on 26, buffer 27-29 |
 | Schedule after slipping a second day | Phase 5 | Phase 5 on 25, Phase 6 evidence on 26, docs and the `submission` tag on 27, buffer 28-29 |
