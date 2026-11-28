@@ -96,6 +96,11 @@ migrations, `services/<service>/migrations/NNN_name.sql`, applied in order on st
   service from starting. Corrections go in a new migration;
 - nothing drops or recreates tables on startup.
 
+| Service | Migrations |
+|---|---|
+| checkins | `001_init` (every table), `002_limit_group_names` (group names over 60 characters shortened, then `groups.name` becomes `NVARCHAR(60)` with a 1-60 CHECK: a change to a table that already holds data, evidenced on Azure in [docs/migration_evidence.md](docs/migration_evidence.md)) |
+| points | `001_init` (every table) |
+
 Connecting is retried while the database is paused or resuming (Azure SQL serverless), up to
 about 2 minutes at startup and with short backoff for requests; a request that still can't reach
 the database gets a clear 503.
@@ -271,8 +276,11 @@ digits) and live only in GitHub secrets and, for the SQL admin, my password mana
 
 Everything is in **austriaeast**. The plan was switzerlandnorth, but it refused new SQL servers
 (`RegionDoesNotAllowProvisioning`), and of the five regions this subscription allows, only
-austriaeast accepts SQL servers. It refuses Azure SQL's free offer (`ProvisioningDisabled`), so
-the databases are serverless without it (ADR-8).
+austriaeast accepts SQL servers. There, Azure SQL's free offer is refused for the spec's size
+(`ProvisioningDisabled` for `GP_S_Gen5_1`, max 1 vCore). The portal only offers it for a new
+database at 2 vCores. On 2026-11-28, switching the existing databases to it in place was
+refused at both 1 and 2 vCores, so the databases are serverless without the free offer (ADR-8),
+and the professor was told by email.
 
 ```bash
 # 1. Subscription and region (the "Allowed resource deployment regions" policy)
@@ -407,6 +415,14 @@ other service.
 
 ## Documentation
 
-- [ADR.md](ADR.md): the five architecture decision records
+- [ADR.md](ADR.md): the architecture decision records, 1-5 from Assignment 1 (2, 3 and 4 now
+  superseded) and 6-10 from Assignment 2 (the split, data and migrations, serverless hosting on
+  Azure, pipeline and testing, and the message broker not built)
+- [docs/architecture.md](docs/architecture.md): the A1 and A2 architecture, the deployment, and one
+  database diagram per service
+- [docs/migration_evidence.md](docs/migration_evidence.md): migration 002 applied on Azure over
+  existing data, with the queries before and after
+- [system.yaml](system.yaml) and `services/<service>/openapi.json`: the machine-readable
+  description of the system, checked by CI
 - [AI_USAGE.md](AI_USAGE.md): the log of how AI was used, phase by phase
 - [CLAUDE.md](CLAUDE.md): the working agreement and decision log used throughout the project

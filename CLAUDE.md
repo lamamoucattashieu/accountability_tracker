@@ -281,6 +281,10 @@ came from. Never record a decision I didn't make.
 | Migration evidence | Phase 6 | A committed `docs/migration_evidence.md`: before/after query outputs, the CD run link and the startup log line |
 | Partial-failure evidence | Phase 6 | Local, `docker compose stop points`, with screenshots and responses; nothing changed on Azure by hand |
 | ADR-10 | Phase 6 | A message broker (Service Bus) deliberately not built; the `points_outbox` instead, and when a broker would be worth it |
+| Free offer, second attempt | Docs | The portal offers the free offer in austriaeast only for a new database at 2 vCores; switching the existing databases in place was refused at 1 and at 2 vCores. Kept as they are; I emailed the professor (2026-11-28) |
+| Diagrams | Docs | Mermaid in `docs/architecture.md` (before/after architecture, deployment, one database diagram per service), generated from the code; exported to PNG for the report |
+| Report draft | Docs | A Word document in my Documents folder, not committed: Claude drafts the evidence sections with screenshots and diagrams; I write the SDLC section and the AI-disclosure statement |
+| `submission` tag | Docs | Tonight (2026-11-28) after the final checks; 29 stays a buffer, moving the tag only with my OK |
 | Who runs the setup | Phase 5 | Claude runs each `az` command in my session after showing it; outputs go into the README without passwords |
 | Schedule after slipping a day | Phase 5 | Everything moves one day: Phase 5 on 24, Phase 6 evidence on 25, docs and the `submission` tag on 26, buffer 27-29 |
 | Schedule after slipping a second day | Phase 5 | Phase 5 on 25, Phase 6 evidence on 26, docs and the `submission` tag on 27, buffer 28-29 |
