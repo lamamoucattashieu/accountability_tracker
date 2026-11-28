@@ -271,8 +271,11 @@ digits) and live only in GitHub secrets and, for the SQL admin, my password mana
 
 Everything is in **austriaeast**. The plan was switzerlandnorth, but it refused new SQL servers
 (`RegionDoesNotAllowProvisioning`), and of the five regions this subscription allows, only
-austriaeast accepts SQL servers. It refuses Azure SQL's free offer (`ProvisioningDisabled`), so
-the databases are serverless without it (ADR-8).
+austriaeast accepts SQL servers. There, Azure SQL's free offer is refused for the spec's size
+(`ProvisioningDisabled` for `GP_S_Gen5_1`, max 1 vCore). The portal only offers it for a new
+database at 2 vCores. On 2026-11-28, switching the existing databases to it in place was
+refused at both 1 and 2 vCores, so the databases are serverless without the free offer (ADR-8),
+and the professor was told by email.
 
 ```bash
 # 1. Subscription and region (the "Allowed resource deployment regions" policy)
